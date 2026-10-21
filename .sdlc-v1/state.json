@@ -21,16 +21,16 @@
         "T001": {
           "depends_on": [],
           "id": "T001",
-          "status": "in_progress",
+          "status": "done",
           "title": "[验证] 本地 ASR 评测台",
-          "updated_at": "2026-10-21T21:38:00+08:00"
+          "updated_at": "2026-10-21T14:33:27Z"
         },
         "T002": {
           "depends_on": [],
           "id": "T002",
-          "status": "todo",
+          "status": "done",
           "title": "[验证] macOS 平台能力与测试签名身份",
-          "updated_at": "2026-10-21T21:15:00+08:00"
+          "updated_at": "2026-10-21T14:33:55Z"
         },
         "T003": {
           "depends_on": [],
@@ -174,7 +174,7 @@
           "updated_at": "2026-10-21T21:15:00+08:00"
         }
       },
-      "updated_at": "2026-10-21T21:38:00+08:00",
+      "updated_at": "2026-10-21T14:33:55Z",
       "validation": {
         "at": null,
         "command": null,
@@ -195,7 +195,7 @@
       "product_context_ref": ".sdlc-v1/context/REQ-001.product.md",
       "status": "in_delivery",
       "title": "按住快捷键语音输入核心闭环",
-      "updated_at": "2026-10-21T21:38:00+08:00"
+      "updated_at": "2026-10-21T14:33:55Z"
     },
     "REQ-002": {
       "created_at": "2026-10-21T11:25:28Z",
