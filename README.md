@@ -10,11 +10,17 @@ macOS 桌面端语音输入：在任意应用中按住快捷键说话，松开�
 | REQ-002 | 识别文本书面化与结构化整理（OpenRouter） | P1 | REQ-001 | [REQ-002.product.md](.sdlc-v1/context/REQ-002.product.md) |
 | REQ-003 | 专有词与个人词典 | P1 | REQ-001 | [REQ-003.product.md](.sdlc-v1/context/REQ-003.product.md) |
 
-调研资料：[本地中英文 ASR 模型选型笔记](research/asr-model-selection.md)。
+调研资料：[本地中英文 ASR 模型选型笔记](research/asr-model-selection.md)、[plan 阶段复用候选与 macOS 平台调研](research/plan-reuse-and-platform-notes.md)。
+
+## 研发
+
+| Feature | Requirement | 状态 | 研发上下文 |
+|---|---|---|---|
+| FEAT-001 闪说核心闭环 | REQ-001 | plan 草案，技术栈待确认 | [FEAT-001.engineering.md](.sdlc-v1/context/FEAT-001.engineering.md) |
 
 ## 交互原型
 
-`prototype/index.html` 是 spec 阶段的可交互原型（v0.1），覆盖 REQ-001～003 的首发体验：Onboarding 与权限引导、按住说话与录音提示、插入规则与修复入口、智能整理设置、词典与历史。直接用浏览器打开即可，不需要安装或联网；右侧"演示设置"面板用于切换场景和模拟系统权限、模型下载、OpenRouter 结果，"原型说明"页列出全部 19 个验收场景的操作方法。
+`prototype/index.html` 是 spec 阶段的可交互原型（v0.2），覆盖 REQ-001～003 的首发体验：Onboarding 与权限引导、按住说话与录音提示、插入规则与修复入口、智能整理设置、词典与历史。直接用浏览器打开即可，不需要安装或联网；右侧"演示设置"面板用于切换场景和模拟系统权限、模型下载、OpenRouter 结果，"原型说明"页列出全部 19 个验收场景的操作方法。
 
 原型里的识别和整理结果是预设句子，不代表真实模型效果。领域规则在 `prototype/domain.js`，可用 `node prototype/tests/domain.test.js` 运行状态测试。场景映射、验证证据和原型限制写在各 Requirement 产品上下文的"原型 baseline"一节。
 
