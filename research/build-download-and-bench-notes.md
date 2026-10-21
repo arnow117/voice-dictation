@@ -58,3 +58,22 @@ PyPI 最新为 1.13.8，有 cp310～cp313 的 macosx_11_0_arm64 wheel。
 | SeACo-Paraformer Test-Aishell1-NE | AISHELL-1 Apache-2.0 | 真人朗读，808 句，400 个热词 | 需下载完整 AISHELL-1（约 15 GB）后按 `data/test/uttid` 筛选 | 备选：真人语音的专有词测试 |
 
 来源：https://huggingface.co/datasets/MrSupW/ContextASR-Bench 、https://arxiv.org/abs/2507.05727 、https://github.com/R1ckShi/SeACo-Paraformer 、https://github.com/HLTCHKUST/ASCEND 、Hugging Face datasets API（cardData.license）。
+
+## T001 补充事实（21:40～21:48）
+
+**热词作用范围（sherpa-onnx v1.13.8 源码）**：`sherpa-onnx/csrc/offline-recognizer-qwen3-asr-impl.cc` 第 817～821 行注释为 "Optional per-stream hotwords via SetOption("hotwords", comma-separated…)"，代码是 `stream->HasOption("hotwords") ? stream->GetOption("hotwords") : qwen3_config.hotwords`。也就是说，Qwen3-ASR 可以在每次识别时单独传热词，个人词典更新后不用重新加载模型。热词放在 chat 模板的 system 段（`<|im_start|>system\n` + 热词 + `<|im_end|>…<|audio_start|>`），逗号分隔后用空格拼接；`max_total_len` 同时限制提示词和音频 KV，超出时日志建议减少热词或缩短音频。`offline-recognizer-funasr-nano-impl.cc` 第 904～905 行只读 `funasr_config.hotwords`，即 Fun-ASR-Nano 的热词只在加载模型时设定，换词典要重建识别器。来源：https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/v1.13.8/sherpa-onnx/csrc/
+
+**sherpa-onnx 1.13.8 安装**：PyPI 上的 `sherpa-onnx==1.13.8` wheel 依赖 `sherpa-onnx-core==1.13.8`（其中含 libonnxruntime.dylib），但 uv 0.11.4 没有自动安装它，需要在依赖中显式写出。
+
+**ContextASR-Bench 时长**：`ContextASR-Speech_Mandarin.jsonl` 共 15,498 条，时长 23.9～97.4 秒（中位数 44.8 秒），没有一条在 3～20 秒内；`entity_list` 是字符串形式的 Python 列表。最终改用 `ContextASR-Dialogue_Mandarin`，按每轮对话的 start/end 切分，取 3～20 秒且包含实体的轮次，每段对话最多 3 轮。实际得到 20 条、来自 7 段对话、平均 10.9 秒。干扰词取自 ContextASR-Speech 中文的实体（400 个，2～8 字，无空格）。
+
+**测试集实际构成**（bench/asr/testset.jsonl）：zh 40 条（5.0～18.4 秒，平均 10.7 秒）、en 30 条（4.3～15.6 秒，平均 9.5 秒）、mixed 30 条（3.0～11.3 秒，平均 5.6 秒；ASCEND 为自然对话，含重复和口头语，例如"我的我的parents"）、entity 20 条（7.2～15.5 秒）。
+
+**冒烟测试**（M5，4 线程，CPU，前 3 条中文，已预热）：
+
+| 模型 | 加载 | 加载后 RSS | 峰值 RSS | 10.4 / 8.3 / 13.9 秒语音的识别耗时 | 观察 |
+|---|---|---|---|---|---|
+| Qwen3-ASR-0.6B | 1.43 s | 1270 MB | 2337 MB（max_total_len=2048） | 0.74 / 0.78 / 1.54 s | 带标点，数字输出为"二零一一年" |
+| SenseVoice-Small | 0.62 s | 885 MB | 919 MB | 0.20 / 0.18 / 0.30 s | 无标点，"钙甲""银河"错字 |
+| Fun-ASR-Nano | 2.75 s | 1848 MB | 2526 MB | 1.08 / 1.12 / 2.21 s | 带标点，准确 |
+| Whisper-turbo int8 | 1.65 s | 2371 MB | 2988 MB | 4.14 / 4.03 / 7.21 s | 丢字，输出繁体 |
