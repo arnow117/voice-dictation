@@ -67,19 +67,19 @@ commands:
 surfaces:
   - name: "macos-app"
     globs: ["app/**", "scripts/**", "Vendor/**"]
-    roles: ["client", "security", "design"]
-    modes: [correctness, e2e]
+    roles: ["client-dev", "design", "security", "qa"]
+    modes: [correctness, "e2e:App"]
   - name: "domain-core"
     globs: ["Packages/ShanshuoCore/**"]
-    roles: ["client"]
+    roles: ["client-dev", "qa"]
     modes: [correctness]
   - name: "asr-bench"
     globs: ["bench/**", "tests/integration/**"]
-    roles: ["quality"]
-    modes: [correctness]
+    roles: ["server-dev", "qa"]
+    modes: [correctness, eval-bench]
   - name: "prototype"
     globs: ["prototype/**"]
-    roles: ["design", "product-owner"]
+    roles: ["design", "product-owner", "qa"]
     modes: [correctness]
 ```
 
