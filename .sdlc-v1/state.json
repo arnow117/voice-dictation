@@ -1,18 +1,201 @@
 {
-  "features": {},
+  "features": {
+    "FEAT-001": {
+      "branch": "feat/FEAT-001-core-loop",
+      "created_at": "2026-10-21T21:15:00+08:00",
+      "engineering_context_ref": ".sdlc-v1/context/FEAT-001.engineering.md",
+      "id": "FEAT-001",
+      "release": {
+        "at": null,
+        "commit": null,
+        "status": "pending"
+      },
+      "requirement_id": "REQ-001",
+      "review": {
+        "at": null,
+        "by": null,
+        "decision": "pending"
+      },
+      "status": "planned",
+      "tasks": {
+        "T001": {
+          "depends_on": [],
+          "id": "T001",
+          "status": "todo",
+          "title": "[验证] 本地 ASR 评测台",
+          "updated_at": "2026-10-21T21:15:00+08:00"
+        },
+        "T002": {
+          "depends_on": [],
+          "id": "T002",
+          "status": "todo",
+          "title": "[验证] macOS 平台能力与测试签名身份",
+          "updated_at": "2026-10-21T21:15:00+08:00"
+        },
+        "T003": {
+          "depends_on": [],
+          "id": "T003",
+          "status": "todo",
+          "title": "[验证] 模型下载源",
+          "updated_at": "2026-10-21T21:15:00+08:00"
+        },
+        "T004": {
+          "depends_on": [
+            "T001",
+            "T002"
+          ],
+          "id": "T004",
+          "status": "todo",
+          "title": "工程骨架",
+          "updated_at": "2026-10-21T21:15:00+08:00"
+        },
+        "T005": {
+          "depends_on": [
+            "T004"
+          ],
+          "id": "T005",
+          "status": "todo",
+          "title": "领域核心与规则迁移",
+          "updated_at": "2026-10-21T21:15:00+08:00"
+        },
+        "T006": {
+          "depends_on": [
+            "T004",
+            "T002"
+          ],
+          "id": "T006",
+          "status": "todo",
+          "title": "系统适配：权限、快捷键、焦点",
+          "updated_at": "2026-10-21T21:15:00+08:00"
+        },
+        "T007": {
+          "depends_on": [
+            "T005",
+            "T006"
+          ],
+          "id": "T007",
+          "status": "todo",
+          "title": "录音提示与音频采集",
+          "updated_at": "2026-10-21T21:15:00+08:00"
+        },
+        "T008": {
+          "depends_on": [
+            "T004",
+            "T001"
+          ],
+          "id": "T008",
+          "status": "todo",
+          "title": "识别引擎",
+          "updated_at": "2026-10-21T21:15:00+08:00"
+        },
+        "T009": {
+          "depends_on": [
+            "T006",
+            "T002"
+          ],
+          "id": "T009",
+          "status": "todo",
+          "title": "文本插入、插入回执与仅复制模式",
+          "updated_at": "2026-10-21T21:15:00+08:00"
+        },
+        "T010": {
+          "depends_on": [
+            "T005",
+            "T006",
+            "T007",
+            "T008",
+            "T009"
+          ],
+          "id": "T010",
+          "status": "todo",
+          "title": "核心闭环集成",
+          "updated_at": "2026-10-21T21:15:00+08:00"
+        },
+        "T011": {
+          "depends_on": [
+            "T010",
+            "T012"
+          ],
+          "id": "T011",
+          "status": "todo",
+          "title": "Onboarding",
+          "updated_at": "2026-10-21T21:15:00+08:00"
+        },
+        "T012": {
+          "depends_on": [
+            "T003",
+            "T008"
+          ],
+          "id": "T012",
+          "status": "todo",
+          "title": "模型管理",
+          "updated_at": "2026-10-21T21:15:00+08:00"
+        },
+        "T013": {
+          "depends_on": [
+            "T010"
+          ],
+          "id": "T013",
+          "status": "todo",
+          "title": "隐私、暂停与历史",
+          "updated_at": "2026-10-21T21:15:00+08:00"
+        },
+        "T014": {
+          "depends_on": [
+            "T011",
+            "T012",
+            "T013"
+          ],
+          "id": "T014",
+          "status": "todo",
+          "title": "设置窗口与菜单栏",
+          "updated_at": "2026-10-21T21:15:00+08:00"
+        },
+        "T015": {
+          "depends_on": [
+            "T010",
+            "T011",
+            "T012",
+            "T013",
+            "T014"
+          ],
+          "id": "T015",
+          "status": "todo",
+          "title": "质量指标与兼容性验收",
+          "updated_at": "2026-10-21T21:15:00+08:00"
+        },
+        "T016": {
+          "depends_on": [
+            "T015"
+          ],
+          "id": "T016",
+          "status": "todo",
+          "title": "测试版打包与安装说明",
+          "updated_at": "2026-10-21T21:15:00+08:00"
+        }
+      },
+      "updated_at": "2026-10-21T21:15:00+08:00",
+      "validation": {
+        "at": null,
+        "command": null,
+        "commit": null,
+        "result": "pending"
+      }
+    }
+  },
   "requirements": {
     "REQ-001": {
       "created_at": "2026-10-21T11:25:28Z",
       "depends_on": [],
       "description": "Onboarding 与权限引导、按住说话、本地中英 ASR、插入活跃输入框、录音提示与隐私控制",
       "domain": "desktop-voice-input",
-      "feature_id": null,
+      "feature_id": "FEAT-001",
       "id": "REQ-001",
       "priority": "P0",
       "product_context_ref": ".sdlc-v1/context/REQ-001.product.md",
-      "status": "ready",
+      "status": "in_delivery",
       "title": "按住快捷键语音输入核心闭环",
-      "updated_at": "2026-10-21T20:33:00+08:00"
+      "updated_at": "2026-10-21T21:15:00+08:00"
     },
     "REQ-002": {
       "created_at": "2026-10-21T11:25:28Z",

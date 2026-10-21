@@ -23,3 +23,11 @@
 ## 本机环境
 
 - Apple M5，16 GB，macOS 26.4.1（25E253），Xcode 26.6（17F113），Swift 6.3.3；已装 cargo/rustc；未找到 "Developer ID Application" 签名证书。
+
+## 补充：快捷键权限、自动学习与剪贴板（2026-10-21 20:50 后）
+
+**只用辅助功能就能监听快捷键。** Apple 开发者论坛帖子 https://developer.apple.com/forums/thread/828082 （2026-05，macOS 15，已签名并公证的应用）描述：在授予辅助功能之前，listen-only 的 `CGEvent.tapCreate` 返回 nil；授予辅助功能之后，tap 创建成功，而应用依然不出现在"输入监控"列表里。`NSEvent.addGlobalMonitorForEvents` 的官方文档写明，按键类事件只有在辅助功能开启、或应用被辅助功能信任时才能监听（https://developer.apple.com/documentation/appkit/nsevent/addglobalmonitorforevents%28matching:handler:%29）。Wispr Flow 的安装说明只要求麦克风和辅助功能（https://docs.wisprflow.ai/articles/3152211871-setup-guide），Handy 的 README 写的也是 "microphone, accessibility"。另一篇实测文章（https://danielraffel.me/til/2026/02/19/cgevent-taps-and-code-signing-the-silent-disable-race/）认为监听全局事件需要输入监控，并指出两点：重新签名后 TCC 会把应用当成新身份，tap 虽然存在但收不到事件；因此要定时检查 `tapIsEnabled`，失效时重新安装。两处说法不一致，以 FEAT-001 T002 的实机结果为准。不授予任何权限时，只能用 Carbon `RegisterEventHotKey` 注册"修饰键 + 普通键"组合，它能收到按下和松开事件，但无法注册单独的 Fn 或右 Option。
+
+**Wispr Flow 的自动学习。** 官方文档 https://docs.wisprflow.ai/articles/4052411709-teach-flow-your-words-with-the-dictionary ：只有打开 "auto-learn words" 并且用户修改了听写出来的文字时，Flow 才会把改正的词自动加入个人词典；在桌面端删除词条是永久的，自动学习不会把已删除的词再学回来；自动学到的词与手动添加的词放在同一个词典中，之后可以再为它补上误拼写。功能页 https://wisprflow.ai/features ："When you correct a spelling, Flow adds it automatically to your personal dictionary." Reddit 用户反馈该开关位于 Settings → System → Extras → Auto-Add to Dictionary。
+
+**本机剪贴板策略实测。** 在 macOS 26.4.1（25E253）上编译并运行一段只读取 `NSPasteboard.general.accessBehavior` 的程序（不读取剪贴板内容），结果为 rawValue 2，对应 `.alwaysAllow`（枚举值：default 0、ask 1、alwaysAllow 2、alwaysDeny 3）。说明当前系统对这个进程没有启用"读取剪贴板需询问"；但该进程由终端启动，权限可能归属终端，独立 .app 的行为仍需在 T002 中实测。本机 `security find-identity -v -p codesigning` 结果为 0 个有效签名身份。
