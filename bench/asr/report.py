@@ -51,6 +51,50 @@ def mark(value, limit):
     return " ✓" if value <= limit else " ✗"
 
 
+def per_clip(testset, clips, relaxed=True):
+    """(edit errors, reference length) per clip, the unit we resample in the bootstrap."""
+    out = {}
+    for c in clips:
+        ref = tn.tokens(testset[c["id"]]["text"], relaxed=relaxed)
+        out[c["id"]] = (tn.edit_distance(ref, tn.tokens(c["hyp"] or "", relaxed=relaxed)), len(ref))
+    return out
+
+
+def boot_ci(pairs, n=2000, seed=7):
+    """95% bootstrap interval of sum(err)/sum(len) by resampling clips."""
+    if not pairs:
+        return float("nan"), float("nan")
+    e = np.array([p[0] for p in pairs], float)
+    l = np.array([p[1] for p in pairs], float)
+    idx = np.random.default_rng(seed).integers(0, len(e), (n, len(e)))
+    rates = e[idx].sum(1) / np.maximum(l[idx].sum(1), 1)
+    return float(np.percentile(rates, 2.5)), float(np.percentile(rates, 97.5))
+
+
+def boot_diff(a, b, n=2000, seed=7):
+    """Paired bootstrap of rate(a) - rate(b) over the clip ids both have."""
+    ids = sorted(set(a) & set(b))
+    if not ids:
+        return float("nan"), float("nan"), float("nan")
+    ea = np.array([a[i][0] for i in ids], float)
+    eb = np.array([b[i][0] for i in ids], float)
+    l = np.array([a[i][1] for i in ids], float)
+    idx = np.random.default_rng(seed).integers(0, len(ids), (n, len(ids)))
+    d = (ea[idx].sum(1) - eb[idx].sum(1)) / np.maximum(l[idx].sum(1), 1)
+    return float((ea.sum() - eb.sum()) / l.sum()), float(np.percentile(d, 2.5)), float(np.percentile(d, 97.5))
+
+
+ROLE_TOKENS = {"system", "user", "assistant"}
+
+
+def suspicious(ref, hyp):
+    """Catastrophic output: empty, a bare chat-role token, or far shorter than the reference."""
+    h = (hyp or "").strip().lower()
+    if not h or h in ROLE_TOKENS:
+        return True
+    return len(tn.tokens(hyp, relaxed=True)) < 0.3 * len(tn.tokens(ref, relaxed=True))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--results", default=str(HERE / "results"))
@@ -143,6 +187,30 @@ def main():
     L.extend(raw_rows)
     w("")
 
+    w("### 1.1 置信区间（宽松口径，bootstrap 2000 次，按句子重抽样）\n")
+    w("每类只有 20～40 条，区间较宽；区间跨过目标线时，不能据此判断达标或不达标。\n")
+    w("| 模型 | " + " | ".join(f"{n} 95% 区间" for _, n, _ in CATS) + " |")
+    w("|---|" + "---|" * len(CATS))
+    pcs = {}
+    for m in acc_by_model:
+        clips = list(acc_by_model[m].values())
+        cells = []
+        for cat, _, _ in CATS:
+            pc = per_clip(testset, [c for c in clips if c["category"] == cat])
+            pcs[(m, cat)] = pc
+            lo, hi = boot_ci(list(pc.values()))
+            cells.append(f"{f_rate(lo)}～{f_rate(hi)}")
+        w(f"| {NAMES[m]} | " + " | ".join(cells) + " |")
+    a_m, b_m = "qwen3-asr-0.6b-int8", "funasr-nano-int8"
+    if (a_m, "zh") in pcs and (b_m, "zh") in pcs:
+        w(f"\n{NAMES[a_m]} 减 {NAMES[b_m]}（同一批句子的配对差值，负数表示 Qwen3 更好）：\n")
+        w("| 类别 | 差值 | 95% 区间 |")
+        w("|---|---|---|")
+        for cat, n, _ in CATS:
+            d, lo, hi = boot_diff(pcs[(a_m, cat)], pcs[(b_m, cat)])
+            w(f"| {n} | {d * 100:+.1f} 个百分点 | {lo * 100:+.1f}～{hi * 100:+.1f} |")
+    w("")
+
     # ------------------------------------------------------------ latency
     w("## 2. 识别延迟（秒，4 线程，CPU）\n")
     w("拼接片段每种长度 10 条（中文 4、英文 3、混说 3），样本少，P95 基本等于最大值。\"真实句子\"一列取准确率测试中所有不超过 15 秒的原始片段。\n")
@@ -211,8 +279,9 @@ def main():
       "global-N 把 20 条里出现过的全部实体与干扰词混成 N 个（相当于个人词典有 N 个词）。Qwen3-ASR 每次识别单独传热词，"
       "Fun-ASR-Nano 只能在加载时设定，词表变化时需要重建识别器。\n")
     w("热词实验在代理环境（仅能效核）中运行，耗时列只用于比较不同热词数量之间的相对变化。\n")
-    w("| 模型 | 模式 | 热词数 | 实体召回 | 句子 CER（宽松） | 识别 P50 / P95 s | 重建识别器 s | 失败 |")
-    w("|---|---|---|---|---|---|---|---|")
+    w("| 模型 | 模式 | 热词数 | 实体召回 | 句子 CER（宽松） | 异常输出 | 识别 P50 / P95 s | 重建识别器 s | 失败 |")
+    w("|---|---|---|---|---|---|---|---|---|")
+    bad_examples = []
     for m in ("qwen3-asr-0.6b-int8", "funasr-nano-int8"):
         for mode in ("none", "clip", "dialogue", "global-50", "global-100", "global-200"):
             r = runs.get((m, "hotwords", 4, "cpu", mode))
@@ -227,10 +296,16 @@ def main():
             cnt = str(counts[0]) if len(counts) == 1 else f"{counts[0]}～{counts[-1]}"
             refs = [testset[c["id"]]["text"] for c in clips]
             cer = tn.error_rate(refs, [c["hyp"] for c in clips], relaxed=True)
+            bad = [c for c in clips if suspicious(testset[c["id"]]["text"], c["hyp"])]
+            bad_examples += [(NAMES[m], mode, c["id"], c["hotword_count"], c["hyp"]) for c in bad]
             v = [c["decode_s"] for c in clips if c["decode_s"] is not None]
             rb = [c["rebuild_s"] for c in clips if c["rebuild_s"]]
             w(f"| {NAMES[m]} | {mode} | {cnt} | {hits}/{total}（{f_rate(hits / total if total else None)}） | {f_rate(cer)} | "
-              f"{f_s(pct(v, 50))} / {f_s(pct(v, 95))} | {f_s(float(np.mean(rb))) if rb else '—'} | {sum(1 for c in clips if c['error'])} |")
+              f"{len(bad)} | {f_s(pct(v, 50))} / {f_s(pct(v, 95))} | {f_s(float(np.mean(rb))) if rb else '—'} | "
+              f"{sum(1 for c in clips if c['error'])} |")
+    w("\n异常输出：结果为空、只有 system/user/assistant 这类角色标记，或长度不足参考文本的 30%。\n")
+    for name, mode, cid, n, hyp in bad_examples:
+        w(f"- {name} {mode}（{n} 个热词）{cid}：输出\"{(hyp or '').strip()[:60]}\"")
     w("")
 
     # ------------------------------------------------------------ examples
