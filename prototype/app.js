@@ -1,5 +1,5 @@
 /*
- * 语音输入原型 — 状态、动作与渲染
+ * 闪说原型 — 状态、动作与渲染
  * 业务规则全部来自 domain.js（与 tests/domain.test.js 共用）。
  * 状态只在内存中，刷新页面会回到初始场景。
  */
@@ -314,6 +314,7 @@
     const check = D.checkCanStart({
       paused: !!state.paused,
       busy: false,
+      secureInput: !!(D.TARGET_APPS[currentTarget()] && D.TARGET_APPS[currentTarget()].secure),
       micPermission: state.perms.mic,
       micAvailable: state.demo.micAvailable,
       modelStatus: state.model.status,
@@ -338,6 +339,10 @@
     log("未开始录音：" + check.message);
     if (check.reason === "paused") {
       showPill({ kind: "paused" }, 3000);
+      return;
+    }
+    if (check.reason === "secure-field") {
+      showPill({ kind: "info", icon: "block", text: check.message }, 2600);
       return;
     }
     if (check.reason === "indicator") {
@@ -529,7 +534,7 @@
       state.clipboard = result.final;
       log("已复制到剪贴板（" + decision.message + "）");
     } else {
-      log("安全输入框：未插入，未写入剪贴板");
+      log("密码框：本次内容已丢弃，未插入、未复制、未写入历史");
     }
 
     if (session.targetAtRelease === "practice" && decision.action === "insert") {
@@ -538,7 +543,7 @@
     }
 
     // 历史与词典命中
-    if (state.historyEnabled) {
+    if (state.historyEnabled && decision.action !== "discard") {
       state.history = [
         {
           id: "h" + Date.now(),
@@ -553,7 +558,7 @@
         },
       ].concat(state.history);
     }
-    if (result.dictionaryHits.length) {
+    if (result.dictionaryHits.length && decision.action !== "discard") {
       state.dict = state.dict.map((e) => (result.dictionaryHits.includes(e.term) ? Object.assign({}, e, { hits: e.hits + 1 }) : e));
       log("词典生效：" + result.dictionaryHits.join("、") + (result.biasHits.length ? "（识别前提示：" + result.biasHits.join("、") + "）" : ""));
     }
@@ -561,8 +566,8 @@
     state.session = null;
 
     let pill;
-    if (decision.action === "blocked") {
-      pill = { kind: "info", icon: "block", text: "安全输入框中不会插入文字" };
+    if (decision.action === "discard") {
+      pill = { kind: "info", icon: "block", text: decision.message };
     } else if (result.fallbackReason) {
       pill = { kind: "info", icon: "warn", text: "智能整理不可用（" + result.fallbackReason + "），" + (decision.action === "insert" ? "已插入原文" : "已复制原文") };
     } else if (decision.action === "copy") {
@@ -702,7 +707,7 @@
     state.onboardingOpen = false;
     state.ob.done.done = true;
     log("引导完成，快捷键已在所有应用中启用");
-    showPill({ kind: "info", icon: "ok", text: "语音输入已就绪 · 按住 " + hotkeyLabel(state.hotkey) + " 说话" }, 2600);
+    showPill({ kind: "info", icon: "ok", text: "闪说已就绪 · 按住 " + hotkeyLabel(state.hotkey) + " 说话" }, 2600);
   }
 
   function testKey() {
@@ -1177,7 +1182,7 @@
     const recording = state.session && state.session.phase === "listening";
     const status = computeStatus();
     const frontName = state.onboardingOpen && !state.onboardingDone || state.settingsOpen
-      ? "语音输入"
+      ? "闪说"
       : { notes: "备忘录", wechat: "微信", login: "Safari", desktop: "访达" }[state.activeTarget];
     const now = new Date();
     const clock = (now.getMonth() + 1) + "月" + now.getDate() + "日 " + String(now.getHours()).padStart(2, "0") + ":" + String(now.getMinutes()).padStart(2, "0");
@@ -1203,7 +1208,7 @@
     const status = computeStatus();
     const item = (label, action, extra) =>
       '<button type="button" class="menu-item' + (extra && extra.cls ? " " + extra.cls : "") + '" role="menuitem" data-action="' + action + '"' + (extra && extra.tab ? ' data-tab="' + extra.tab + '"' : "") + ">" + label + (extra && extra.right ? '<span class="muted small">' + extra.right + "</span>" : "") + "</button>";
-    let html = '<div class="menu" id="menu" role="menu" aria-label="语音输入菜单">';
+    let html = '<div class="menu" id="menu" role="menu" aria-label="闪说菜单">';
     html += '<div class="menu-status"><strong>' + esc(status.title) + "</strong><span>" + esc(status.sub) + "</span></div>";
     if (!state.onboardingDone) html += item("继续设置…", "continue-onboarding", { cls: "menu-warning" });
     if (state.onboardingDone && copyOnly()) html += item("开启直接插入…", "open-sys-accessibility", { cls: "menu-warning" });
@@ -1263,7 +1268,7 @@
         '<div class="body"><form class="login" onsubmit="return false">' +
         '<div><label for="t-user">账号</label><input id="t-user" value="' + esc(state.targets.login.user) + '" /></div>' +
         '<div><label for="t-pass">密码</label><input id="t-pass" type="password" autocomplete="off" /></div>' +
-        '<div class="target-hint">密码框属于安全输入框：语音输入不会向这里插入文字，也不会写入剪贴板。</div>' +
+        '<div class="target-hint">密码框属于安全输入框：闪说在这里不可用，按住快捷键不会录音。</div>' +
         "</form></div>";
     }
     layer.innerHTML = windowChrome(title, body, "target-window", null);
@@ -1323,12 +1328,12 @@
   function sysPane(kind) {
     const conf = {
       "sys-mic": { crumb: "隐私与安全性 › 麦克风", desc: "允许下列应用访问麦克风。", perm: "mic", on: state.perms.mic === "granted" },
-      "sys-accessibility": { crumb: "隐私与安全性 › 辅助功能", desc: "允许下列应用控制你的电脑。语音输入用它把文字插入当前输入框。", perm: "accessibility", on: state.perms.accessibility === "granted" },
+      "sys-accessibility": { crumb: "隐私与安全性 › 辅助功能", desc: "允许下列应用控制你的电脑。闪说用它把文字插入当前输入框。", perm: "accessibility", on: state.perms.accessibility === "granted" },
       "sys-input": { crumb: "隐私与安全性 › 输入监控", desc: "允许下列应用监控键盘输入。更改后需要重新打开应用才能生效。", perm: "inputMonitoring", on: state.perms.inputMonitoring === "granted" },
     }[kind];
     const body =
       '<div class="body"><div class="breadcrumb">' + conf.crumb + '</div><p class="small muted" style="margin:0">' + conf.desc + "</p>" +
-      '<div class="sys-row"><div class="left"><span class="mini-icon"></span>语音输入</div><label class="switch"><input type="checkbox" id="sys-switch" data-change="sys-toggle" data-perm="' + conf.perm + '"' + (conf.on ? " checked" : "") + ' aria-label="允许语音输入"><span></span></label></div>' +
+      '<div class="sys-row"><div class="left"><span class="mini-icon"></span>闪说</div><label class="switch"><input type="checkbox" id="sys-switch" data-change="sys-toggle" data-perm="' + conf.perm + '"' + (conf.on ? " checked" : "") + ' aria-label="允许语音输入"><span></span></label></div>' +
       '<div class="sys-row"><div class="left"><span class="mini-icon gray"></span>Zoom</div><label class="switch"><input type="checkbox" checked disabled aria-label="Zoom"><span></span></label></div>' +
       '<div class="row" style="justify-content:flex-end"><button type="button" class="btn" data-action="close-overlay">完成</button></div></div>';
     return '<div class="scrim">' + windowChrome("系统设置（模拟）", body, "sys-settings", "close-overlay").replace('class="window sys-settings"', 'class="window sys-settings" style="position:relative"') + "</div>";
@@ -1345,7 +1350,7 @@
       layer.innerHTML =
         '<div class="scrim"><div class="alert" role="alertdialog" aria-label="麦克风授权">' +
         '<div class="app-icon">' + WAVE_ICON + "</div>" +
-        "<h3>“语音输入”想要访问麦克风</h3>" +
+        "<h3>“闪说”想要访问麦克风</h3>" +
         "<p>按住快捷键时用于录音，松开立即停止。音频只在本机识别，不会上传。</p>" +
         '<div class="row"><button type="button" class="btn" data-action="mic-deny">不允许</button><button type="button" class="btn primary" id="mic-allow" data-action="mic-allow">允许</button></div>' +
         '<p class="small">（模拟的系统弹窗）</p></div></div>';
@@ -1358,7 +1363,7 @@
         '<div class="row" style="justify-content:flex-end"><button type="button" class="btn" data-action="close-overlay">完成</button></div></div>';
       layer.innerHTML = '<div class="scrim">' + windowChrome("系统设置（模拟）", body, "sys-settings", "close-overlay").replace('class="window sys-settings"', 'class="window sys-settings" style="position:relative"') + "</div>";
     } else if (o.kind === "restart") {
-      layer.innerHTML = '<div class="scrim"><div class="alert"><div class="app-icon">' + WAVE_ICON + "</div><h3>正在重新打开“语音输入”…</h3><p>输入监控权限需要重新打开应用后生效。</p></div></div>";
+      layer.innerHTML = '<div class="scrim"><div class="alert"><div class="app-icon">' + WAVE_ICON + "</div><h3>正在重新打开“闪说”…</h3><p>输入监控权限需要重新打开应用后生效。</p></div></div>";
     } else if (o.kind === "emoji") {
       layer.innerHTML =
         '<div class="pill-layer" style="bottom:90px"><div class="alert" style="width:300px;text-align:left"><h3>表情与符号</h3><p style="font-size:22px;letter-spacing:6px">😀😂🥹👍🎉🙏</p><p>（模拟）系统响应了 🌐 键，没有开始录音。到「快捷键」步骤修复冲突。</p></div></div>';
@@ -1456,7 +1461,7 @@
       case "accessibility":
         return (
           "<h2>允许把文字直接插入输入框</h2>" +
-          '<p class="lead">macOS 把这项能力放在「辅助功能」权限里。语音输入只用它把文字放到光标处，不读取屏幕内容或其他应用里的文字。</p>' +
+          '<p class="lead">macOS 把这项能力放在「辅助功能」权限里。闪说只用它把文字放到光标处，不读取屏幕内容或其他应用里的文字。</p>' +
           (p.accessibility === "granted"
             ? '<div class="callout ok">已允许，识别结果会直接插入当前输入框。</div>'
             : '<div class="row"><button type="button" class="btn primary" data-action="open-sys-accessibility">打开系统设置</button><button type="button" class="btn" data-action="ob-skip-accessibility">稍后再说</button></div>' +
@@ -1469,7 +1474,7 @@
           '<p class="small muted">（演示设置中标明：是否需要这一步取决于 plan 阶段的工程方案。）</p>' +
           (p.inputMonitoring === "granted"
             ? state.ob.restartNeeded
-              ? '<div class="callout warn">macOS 需要重新打开语音输入，这项权限才会生效。引导进度会保留。</div><div class="row"><button type="button" class="btn primary" data-action="restart-app">重新打开</button></div>'
+              ? '<div class="callout warn">macOS 需要重新打开闪说，这项权限才会生效。引导进度会保留。</div><div class="row"><button type="button" class="btn primary" data-action="restart-app">重新打开</button></div>'
               : '<div class="callout ok">已允许，快捷键可以在所有应用中使用。</div>'
             : '<div class="row"><button type="button" class="btn primary" data-action="open-sys-input">打开系统设置</button></div>')
         );
@@ -1606,7 +1611,7 @@
       .join("");
     const body =
       '<div class="ob-body"><ol class="ob-steps" aria-label="引导步骤">' + list + '</ol><div class="ob-content" data-step="' + state.ob.step + '">' + obStepContent(state.ob.step) + "</div></div>" + obFooter(state.ob.step);
-    layer.innerHTML = windowChrome("欢迎使用语音输入", body, "ob-window", "close-onboarding");
+    layer.innerHTML = windowChrome("欢迎使用闪说", body, "ob-window", "close-onboarding");
   }
 
   // ---------- 设置 ----------
@@ -1718,7 +1723,7 @@
   }
 
   function settingsHistory() {
-    const actionTag = { insert: '<span class="tag ok">已插入</span>', copy: '<span class="tag warn">已复制</span>', blocked: '<span class="tag bad">未插入 · 安全输入框</span>' };
+    const actionTag = { insert: '<span class="tag ok">已插入</span>', copy: '<span class="tag warn">已复制</span>' };
     const s = state.historySuggestion;
     const items = state.history.length
       ? state.history
@@ -1764,7 +1769,7 @@
     ];
     return (
       "<h3>隐私与数据</h3>" +
-      '<p class="small muted" style="margin:0">首发没有账户，也没有遥测。下表是语音输入保存或发送的全部数据。</p>' +
+      '<p class="small muted" style="margin:0">首发没有账户，也没有遥测。下表是闪说保存或发送的全部数据。</p>' +
       '<table class="list"><thead><tr><th>数据</th><th>位置</th><th>保留</th></tr></thead><tbody>' +
       rows.map((r) => "<tr><td>" + esc(r[0]) + "</td><td>" + esc(r[1]) + "</td><td>" + esc(r[2]) + "</td></tr>").join("") +
       "</tbody></table>"
@@ -1797,7 +1802,7 @@
       '<div class="settings-body"><nav class="settings-nav" aria-label="设置分类">' +
       tabs.map(([id, label]) => '<button type="button" data-action="settings-tab" data-tab="' + id + '"' + (state.settingsTab === id ? ' aria-current="page"' : "") + ">" + label + "</button>").join("") +
       '</nav><div class="settings-content" data-tab="' + state.settingsTab + '">' + content + "</div></div>";
-    layer.innerHTML = windowChrome("语音输入 设置", body, "settings-window", "close-settings");
+    layer.innerHTML = windowChrome("闪说 设置", body, "settings-window", "close-settings");
   }
 
   // ---------- 演示设置面板（不属于产品界面） ----------
@@ -1810,7 +1815,7 @@
     ["SCN-006", "按住说话插入备忘录", "场景「已完成引导 · 本地模式」，点击备忘录正文后按住快捷键"],
     ["SCN-007", "误触、取消、静音", "快速点一下键；按住时按 Esc；选择「没有说话」后按住"],
     ["SCN-008", "处理期间切换焦点", "勾选「处理期间切换焦点」后说话 → 不插入，复制到剪贴板"],
-    ["SCN-009", "密码框不插入", "前台应用选「Safari · 登录页」后说话 → 不插入、不写剪贴板"],
+    ["SCN-009", "密码框中不支持语音", "前台应用选「Safari · 登录页」后按住快捷键 → 不录音，提示密码框中不支持语音输入"],
     ["SCN-010", "3 分钟上限", "按住时点「录音快进到 2:45」，看倒计时后自动结束"],
     ["SCN-011", "权限撤销与模型缺失", "系统权限把麦克风改为未允许，或设置里删除模型，再按住快捷键 → 修复卡片"],
     ["SCN-012", "暂停语音输入", "菜单栏 → 暂停 1 小时 → 按住快捷键 → 胶囊提示已暂停，可直接恢复"],
@@ -1845,7 +1850,7 @@
     if (state.demo.tab === "notes") {
       body =
         '<div class="notes">' +
-        "<p>v0.1 · 覆盖 REQ-001～003 的首发体验。所有系统弹窗、权限、模型、OpenRouter 和剪贴板都是本地模拟；状态只在内存中，刷新页面会重置。</p>" +
+        "<p>v0.2 · 覆盖 REQ-001～003 的首发体验。所有系统弹窗、权限、模型、OpenRouter 和剪贴板都是本地模拟；状态只在内存中，刷新页面会重置。</p>" +
         "<h3>验收场景</h3><ul>" +
         SCENARIO_NOTES.map((s) => "<li><strong>" + s[0] + " " + esc(s[1]) + "</strong>：" + esc(s[2]) + "</li>").join("") +
         "</ul>" +

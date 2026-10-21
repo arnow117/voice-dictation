@@ -29,6 +29,7 @@ test("REQ-001 开始录音：条件齐备时允许", () => {
 test("REQ-001 开始录音：暂停、处理中、缺权限、缺模型、提示不可显示时拒绝", () => {
   const cases = [
     [{ paused: true }, "paused"],
+    [{ secureInput: true }, "secure-field"],
     [{ busy: true }, "busy"],
     [{ micPermission: "denied" }, "mic-permission"],
     [{ micAvailable: false }, "mic-unavailable"],
@@ -52,7 +53,7 @@ test("REQ-001 DEC-006：0.3 秒误触与 3 分钟上限", () => {
   assert.strictEqual(D.shouldAutoStop(180000), true);
 });
 
-test("REQ-001 DEC-008/DEC-003：插入决策", () => {
+test("REQ-001 DEC-013/DEC-003：插入决策", () => {
   const insert = { targetAtRelease: "notes", targetAtInsert: "notes", accessibility: "granted" };
   assert.strictEqual(D.decideInsertion(insert).action, "insert");
   assert.strictEqual(
@@ -64,16 +65,21 @@ test("REQ-001 DEC-008/DEC-003：插入决策", () => {
       .action,
     "copy"
   );
+  // DEC-013：录音期间焦点进入密码框，或处理期间切到密码框，都丢弃本次内容
   assert.strictEqual(
     D.decideInsertion({ targetAtRelease: "login", targetAtInsert: "login", accessibility: "granted" })
       .action,
-    "blocked"
+    "discard"
   );
-  // 密码框优先于焦点变化：不写剪贴板
   assert.strictEqual(
     D.decideInsertion({ targetAtRelease: "login", targetAtInsert: "notes", accessibility: "granted" })
       .action,
-    "blocked"
+    "discard"
+  );
+  assert.strictEqual(
+    D.decideInsertion({ targetAtRelease: "notes", targetAtInsert: "login", accessibility: "granted" })
+      .action,
+    "discard"
   );
   assert.strictEqual(
     D.decideInsertion(Object.assign({}, insert, { accessibility: "denied" })).action,

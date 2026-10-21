@@ -1,5 +1,5 @@
 /*
- * 语音输入原型 — 领域逻辑（UI 与测试共用同一份源码）
+ * 闪说原型 — 领域逻辑（UI 与测试共用同一份源码）
  * 规则来源见 .sdlc-v1/context/REQ-001～003.product.md
  * 本文件只包含纯函数与常量，不访问 DOM。
  */
@@ -148,12 +148,17 @@
   /**
    * @param {object} ctx
    *  paused, micPermission ('granted'|'denied'|'not-determined'), micAvailable,
-   *  modelStatus ('ready'|...), indicatorAvailable, busy
+   *  modelStatus ('ready'|...), indicatorAvailable, busy,
+   *  secureInput（焦点在密码框等安全输入框）
    * @returns {{ok: true} | {ok: false, reason: string, message: string}}
    */
   function checkCanStart(ctx) {
     if (ctx.paused) {
       return { ok: false, reason: "paused", message: "语音输入已暂停" };
+    }
+    if (ctx.secureInput) {
+      // REQ-001 DEC-013：密码框中不支持语音输入，不开始录音
+      return { ok: false, reason: "secure-field", message: "密码框中不支持语音输入" };
     }
     if (ctx.busy) {
       return { ok: false, reason: "busy", message: "上一段仍在处理" };
@@ -190,17 +195,19 @@
     return elapsedMs >= RULES.maxRecordingMs;
   }
 
-  // ---------- REQ-001 DEC-003 / DEC-008：插入决策 ----------
+  // ---------- REQ-001 DEC-003 / DEC-013：插入决策 ----------
   /**
    * @param {object} ctx
    *  targetAtRelease, targetAtInsert: TARGET_APPS 的 id
    *  accessibility: 'granted' | 其他
-   * @returns {{action: 'insert'|'copy'|'blocked', message: string}}
+   * @returns {{action: 'insert'|'copy'|'discard', message: string}}
    */
   function decideInsertion(ctx) {
     const target = TARGET_APPS[ctx.targetAtRelease];
-    if (target && target.secure) {
-      return { action: "blocked", message: "安全输入框中不会插入文字，结果只保存在历史中" };
+    const insertTarget = TARGET_APPS[ctx.targetAtInsert];
+    // DEC-013：录音或处理期间焦点进入密码框，丢弃本次内容：不插入、不复制、不记历史
+    if ((target && target.secure) || (insertTarget && insertTarget.secure)) {
+      return { action: "discard", message: "密码框中不支持语音输入，本次内容已丢弃" };
     }
     if (ctx.targetAtInsert !== ctx.targetAtRelease) {
       return { action: "copy", message: "焦点已变化，已复制到剪贴板" };
