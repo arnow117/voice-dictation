@@ -21,9 +21,9 @@
         "T001": {
           "depends_on": [],
           "id": "T001",
-          "status": "todo",
+          "status": "in_progress",
           "title": "[验证] 本地 ASR 评测台",
-          "updated_at": "2026-10-21T21:15:00+08:00"
+          "updated_at": "2026-10-21T21:38:00+08:00"
         },
         "T002": {
           "depends_on": [],
@@ -35,9 +35,9 @@
         "T003": {
           "depends_on": [],
           "id": "T003",
-          "status": "in_progress",
+          "status": "done",
           "title": "[验证] 模型下载源",
-          "updated_at": "2026-10-21T21:24:00+08:00"
+          "updated_at": "2026-10-21T21:38:00+08:00"
         },
         "T004": {
           "depends_on": [
@@ -174,7 +174,7 @@
           "updated_at": "2026-10-21T21:15:00+08:00"
         }
       },
-      "updated_at": "2026-10-21T21:24:00+08:00",
+      "updated_at": "2026-10-21T21:38:00+08:00",
       "validation": {
         "at": null,
         "command": null,
@@ -195,7 +195,7 @@
       "product_context_ref": ".sdlc-v1/context/REQ-001.product.md",
       "status": "in_delivery",
       "title": "按住快捷键语音输入核心闭环",
-      "updated_at": "2026-10-21T21:24:00+08:00"
+      "updated_at": "2026-10-21T21:38:00+08:00"
     },
     "REQ-002": {
       "created_at": "2026-10-21T11:25:28Z",
