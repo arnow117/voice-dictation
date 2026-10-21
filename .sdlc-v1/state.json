@@ -10,9 +10,9 @@
       "id": "REQ-001",
       "priority": "P0",
       "product_context_ref": ".sdlc-v1/context/REQ-001.product.md",
-      "status": "captured",
+      "status": "ready",
       "title": "按住快捷键语音输入核心闭环",
-      "updated_at": "2026-10-21T11:25:28Z"
+      "updated_at": "2026-10-21T20:33:00+08:00"
     },
     "REQ-002": {
       "created_at": "2026-10-21T11:25:28Z",
