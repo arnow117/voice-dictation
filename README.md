@@ -12,6 +12,12 @@ macOS 桌面端语音输入：在任意应用中按住快捷键说话，松开�
 
 调研资料：[本地中英文 ASR 模型选型笔记](research/asr-model-selection.md)。
 
+## 交互原型
+
+`prototype/index.html` 是 spec 阶段的可交互原型（v0.1），覆盖 REQ-001～003 的首发体验：Onboarding 与权限引导、按住说话与录音提示、插入规则与修复入口、智能整理设置、词典与历史。直接用浏览器打开即可，不需要安装或联网；右侧"演示设置"面板用于切换场景和模拟系统权限、模型下载、OpenRouter 结果，"原型说明"页列出全部 19 个验收场景的操作方法。
+
+原型里的识别和整理结果是预设句子，不代表真实模型效果。领域规则在 `prototype/domain.js`，可用 `node prototype/tests/domain.test.js` 运行状态测试。场景映射、验证证据和原型限制写在各 Requirement 产品上下文的"原型 baseline"一节。
+
 ## 进度跟踪
 
 本项目使用 SDLC 流程管理。需求和交付进度以 `.sdlc-v1/state.json` 为准，可用 `lifecycle_state.py status` / `next` 查看；GitHub Issues 只同步阶段进展，便于查看和讨论。
