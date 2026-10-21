@@ -14,6 +14,7 @@
 
   // ---------- 规则常量（单一来源） ----------
   const RULES = {
+    learnObserveMinutes: 2, // REQ-003 DEC-007：插入后最多留意 2 分钟
     misfireMs: 300, // REQ-001 DEC-006：短于 0.3 秒视为误触
     maxRecordingMs: 180000, // REQ-001 DEC-006：单次最长 3 分钟
     countdownFromMs: 165000, // 最后 15 秒倒计时
@@ -85,6 +86,16 @@
       misrecognitions: [
         { wrong: "科德克斯", right: "Codex" },
         { wrong: "王冲", right: "王翀" },
+      ],
+    },
+    {
+      id: "learn",
+      label: "新专有词：Manus、李莉（词典里没有）",
+      asr: "让马纳斯跑一下，结果发给李丽。",
+      polished: "让 Manus 跑一下，结果发给李莉。",
+      misrecognitions: [
+        { wrong: "马纳斯", right: "Manus" },
+        { wrong: "李丽", right: "李莉" },
       ],
     },
     {
@@ -367,69 +378,232 @@
     });
   }
 
-  // ---------- REQ-003 DEC-002：从历史纠错中提议词条 ----------
+  // ---------- REQ-003 DEC-007：静默学习用户对插入文字的修改 ----------
   const TRIVIAL_EDIT = /^[\s，。、！？,.!?；;：:“”"'（）()嗯啊呃吧呀哦]*$/;
 
-  function suggestFromEdit(original, edited) {
-    if (original === edited) {
-      return null;
+  const LEARN = {
+    maxTermLength: 24, // 单处改动超过 24 个字，视为改写，不是专有词
+    maxChangedRatio: 0.6, // 改动超过插入内容的 60%，视为整段改写
+    maxHunks: 3, // 一次修改超过 3 处，视为改写
+    replaceAfter: 2, // 同一组"误识别 → 正确"出现第 2 次才启用确定性替换
+  };
+
+  // 原型用的小拼音表，只覆盖演示句子；生产实现使用完整拼音库并容忍常见口音差异。
+  const DEMO_PINYIN = {
+    王: "wang", 冲: "chong", 翀: "chong", 三: "san", 四: "si", 周: "zhou", 李: "li",
+    丽: "li", 莉: "li", 张: "zhang", 章: "zhang", 伟: "wei", 玮: "wei", 晓: "xiao",
+    小: "xiao", 明: "ming", 铭: "ming", 发: "fa", 给: "gei", 文: "wen", 档: "dang",
+  };
+
+  function tokenize(text) {
+    return text.match(/[A-Za-z0-9][A-Za-z0-9._+-]*|\s+|[\s\S]/g) || [];
+  }
+
+  // 按词元做最长公共子序列比较，返回连续的改动段（英文整词、汉字逐字）。
+  function diffHunks(a, b) {
+    const n = a.length;
+    const m = b.length;
+    const lcs = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+    for (let i = n - 1; i >= 0; i -= 1) {
+      for (let j = m - 1; j >= 0; j -= 1) {
+        lcs[i][j] = a[i] === b[j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+      }
     }
-    let start = 0;
-    while (start < original.length && start < edited.length && original[start] === edited[start]) {
-      start += 1;
+    const hunks = [];
+    let i = 0;
+    let j = 0;
+    let open = null;
+    const close = () => {
+      if (open) {
+        open.aEnd = i;
+        open.bEnd = j;
+        hunks.push(open);
+        open = null;
+      }
+    };
+    while (i < n || j < m) {
+      if (i < n && j < m && a[i] === b[j]) {
+        close();
+        i += 1;
+        j += 1;
+      } else {
+        if (!open) open = { aStart: i, bStart: j };
+        if (j < m && (i >= n || lcs[i][j + 1] >= lcs[i + 1][j])) j += 1;
+        else i += 1;
+      }
     }
-    let endOriginal = original.length;
-    let endEdited = edited.length;
-    while (
-      endOriginal > start &&
-      endEdited > start &&
-      original[endOriginal - 1] === edited[endEdited - 1]
-    ) {
-      endOriginal -= 1;
-      endEdited -= 1;
+    close();
+    // 只隔着空白的两段合并，例如 "open router" → "OpenRouter"
+    const merged = [];
+    for (const h of hunks) {
+      const last = merged[merged.length - 1];
+      const gapA = last ? a.slice(last.aEnd, h.aStart) : null;
+      if (last && gapA.length > 0 && gapA.every((t) => /^\s+$/.test(t))) {
+        last.aEnd = h.aEnd;
+        last.bEnd = h.bEnd;
+      } else {
+        merged.push(Object.assign({}, h));
+      }
     }
-    // 只改了标点、空白或语气词时不提议（在扩展词边界之前判断）
-    if (
-      TRIVIAL_EDIT.test(original.slice(start, endOriginal)) &&
-      TRIVIAL_EDIT.test(edited.slice(start, endEdited))
-    ) {
-      return null;
+    return merged;
+  }
+
+  const isCJK = (t) => !!t && /^[\u4e00-\u9fff]$/.test(t);
+
+  // 汉字只改一个字时，向相邻的未改动汉字扩展到两个字，例如「冲 → 翀」扩展为「王冲 → 王翀」。
+  function expandHunk(a, b, h) {
+    const r = Object.assign({}, h);
+    const aLen = r.aEnd - r.aStart;
+    const bLen = r.bEnd - r.bStart;
+    const singleCJK = aLen === 1 && bLen === 1 && isCJK(a[r.aStart]) && isCJK(b[r.bStart]);
+    if (singleCJK) {
+      if (r.aStart > 0 && r.bStart > 0 && isCJK(a[r.aStart - 1]) && a[r.aStart - 1] === b[r.bStart - 1]) {
+        r.aStart -= 1;
+        r.bStart -= 1;
+      } else if (r.aEnd < a.length && r.bEnd < b.length && isCJK(a[r.aEnd]) && a[r.aEnd] === b[r.bEnd]) {
+        r.aEnd += 1;
+        r.bEnd += 1;
+      }
     }
-    // 逐字比较只得到改动的字符；扩展到完整的英文单词，汉字至少取两个字，
-    // 例如「王冲 → 王翀」提议「王翀」而不是「翀」。
-    const isWordChar = (ch) => !!ch && /[A-Za-z0-9]/.test(ch);
-    const isCJK = (ch) => !!ch && /[\u4e00-\u9fff]/.test(ch);
-    const touchesWord = (i, j) => isWordChar(original[i]) || isWordChar(edited[j]);
-    while (start > 0 && isWordChar(original[start - 1]) && touchesWord(start, start)) {
-      start -= 1;
+    return r;
+  }
+
+  function levenshtein(x, y) {
+    const d = Array.from({ length: x.length + 1 }, (_, i) => [i].concat(new Array(y.length).fill(0)));
+    for (let j = 1; j <= y.length; j += 1) d[0][j] = j;
+    for (let i = 1; i <= x.length; i += 1) {
+      for (let j = 1; j <= y.length; j += 1) {
+        d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (x[i - 1] === y[j - 1] ? 0 : 1));
+      }
     }
-    while (
-      endOriginal < original.length &&
-      isWordChar(original[endOriginal]) &&
-      touchesWord(endOriginal - 1, endEdited - 1)
-    ) {
-      endOriginal += 1;
-      endEdited += 1;
+    return d[x.length][y.length];
+  }
+
+  /**
+   * 改动前后读音是否相近：只学"听错了"的修改，不学"改了意思"的修改。
+   * 英文：大小写/空格差异或拼写接近；中文音译 ↔ 英文：接受；中文：逐字拼音相同。
+   */
+  function soundsAlike(wrong, right) {
+    const latin = (t) => /^[A-Za-z0-9 ._+-]+$/.test(t);
+    const cjk = (t) => /^[\u4e00-\u9fff]+$/.test(t);
+    if (latin(wrong) && latin(right)) {
+      const x = wrong.toLowerCase().replace(/[\s._-]/g, "");
+      const y = right.toLowerCase().replace(/[\s._-]/g, "");
+      if (x === y) return true;
+      return levenshtein(x, y) / Math.max(x.length, y.length) <= 0.4;
     }
-    if (endEdited - start < 2 && start > 0 && isCJK(original[start - 1])) {
-      start -= 1;
+    if ((cjk(wrong) && latin(right)) || (latin(wrong) && cjk(right))) return true;
+    if (cjk(wrong) && cjk(right) && wrong.length === right.length) {
+      return Array.from(wrong).every((ch, i) => DEMO_PINYIN[ch] && DEMO_PINYIN[ch] === DEMO_PINYIN[right[i]]);
     }
-    if (endEdited - start < 2 && endOriginal < original.length && isCJK(original[endOriginal])) {
-      endOriginal += 1;
-      endEdited += 1;
+    return false;
+  }
+
+  /**
+   * 从一次修改中找出可以学习的"误识别 → 正确写法"。
+   * @returns {{candidates: {wrong: string, right: string}[], skipped: {wrong: string, right: string, reason: string}[], reason?: string}}
+   */
+  function extractCorrections(inserted, edited) {
+    if (inserted === edited) return { candidates: [], skipped: [], reason: "没有修改" };
+    const a = tokenize(inserted);
+    const b = tokenize(edited);
+    const hunks = diffHunks(a, b);
+    const changedA = hunks.reduce((sum, h) => sum + a.slice(h.aStart, h.aEnd).join("").length, 0);
+    const changedB = hunks.reduce((sum, h) => sum + b.slice(h.bStart, h.bEnd).join("").length, 0);
+    const rewritten =
+      changedA > inserted.length * LEARN.maxChangedRatio || changedB > edited.length * LEARN.maxChangedRatio;
+    if (hunks.length > LEARN.maxHunks || rewritten) {
+      return { candidates: [], skipped: [], reason: "整段改写，不学习" };
     }
-    const wrong = original.slice(start, endOriginal).trim();
-    const right = edited.slice(start, endEdited).trim();
-    if (!wrong || !right) {
-      return null;
+    const candidates = [];
+    const skipped = [];
+    for (const raw of hunks) {
+      const h = expandHunk(a, b, raw);
+      const wrong = a.slice(h.aStart, h.aEnd).join("").trim();
+      const right = b.slice(h.bStart, h.bEnd).join("").trim();
+      const item = { wrong, right };
+      if (TRIVIAL_EDIT.test(wrong) && TRIVIAL_EDIT.test(right)) skipped.push(Object.assign(item, { reason: "只改了标点或语气词" }));
+      else if (!wrong || !right) skipped.push(Object.assign(item, { reason: "新增或删除内容" }));
+      else if (right.length > LEARN.maxTermLength) skipped.push(Object.assign(item, { reason: "改动过长" }));
+      else if (!soundsAlike(wrong, right)) skipped.push(Object.assign(item, { reason: "读音不相近，更像修改内容" }));
+      else candidates.push(item);
     }
-    if (TRIVIAL_EDIT.test(wrong) && TRIVIAL_EDIT.test(right)) {
-      return null;
+    return { candidates, skipped };
+  }
+
+  /**
+   * 静默学习：第一次看到某个纠正就把正确写法加入词典（来源"自动学习"），
+   * 用于识别前提示和整理；同一组纠正第二次出现才启用"误识别 → 正确"的确定性替换。
+   * 用户删除过的自动学习词不再学回。
+   * @param {object} ctx inserted, edited, dict, ignored（已删除词，归一化后）, counts（纠正次数）
+   */
+  function learnFromEdit(ctx) {
+    const extracted = extractCorrections(ctx.inserted, ctx.edited);
+    let dict = ctx.dict;
+    const counts = Object.assign({}, ctx.counts || {});
+    const ignored = ctx.ignored || [];
+    const learned = [];
+    const skipped = extracted.skipped.slice();
+    for (const c of extracted.candidates) {
+      if (ignored.includes(normalizeForMatch(c.right))) {
+        skipped.push(Object.assign({}, c, { reason: "你删除过这个词，不再自动学习" }));
+        continue;
+      }
+      const owner = dict.find((e) => e.term !== c.right && e.variants.some((v) => normalizeForMatch(v) === normalizeForMatch(c.wrong)));
+      if (owner) {
+        skipped.push(Object.assign({}, c, { reason: "「" + c.wrong + "」已映射到「" + owner.term + "」" }));
+        continue;
+      }
+      const key = normalizeForMatch(c.wrong) + "→" + c.right;
+      const count = (counts[key] || 0) + 1;
+      counts[key] = count;
+      const entry = dict.find((e) => e.term === c.right);
+      if (!entry) {
+        const added = createEntry({ term: c.right, source: "auto" });
+        added.pendingVariants = count >= LEARN.replaceAfter ? [] : [c.wrong];
+        if (count >= LEARN.replaceAfter) added.variants = [c.wrong];
+        dict = dict.concat([added]);
+        learned.push(Object.assign({}, c, { action: "added-term", count }));
+      } else if (entry.variants.some((v) => normalizeForMatch(v) === normalizeForMatch(c.wrong))) {
+        skipped.push(Object.assign({}, c, { reason: "词典中已有这条替换" }));
+      } else if (count >= LEARN.replaceAfter) {
+        dict = dict.map((e) =>
+          e === entry
+            ? Object.assign({}, e, {
+                variants: e.variants.concat([c.wrong]),
+                pendingVariants: (e.pendingVariants || []).filter((v) => normalizeForMatch(v) !== normalizeForMatch(c.wrong)),
+              })
+            : e
+        );
+        learned.push(Object.assign({}, c, { action: "enabled-replace", count }));
+      } else {
+        dict = dict.map((e) =>
+          e === entry ? Object.assign({}, e, { pendingVariants: Array.from(new Set((e.pendingVariants || []).concat([c.wrong]))) }) : e
+        );
+        learned.push(Object.assign({}, c, { action: "counted", count }));
+      }
     }
-    if (right.length > 24) {
-      return null; // 改动过长，更像是改写整句，不是专有词
-    }
-    return { term: right, variant: wrong };
+    return { dict, counts, learned, skipped, reason: extracted.reason };
+  }
+
+  /**
+   * 删除词条；自动学习来的词记入忽略列表，以后不再学回。
+   */
+  function forgetEntry(dict, ignored, id) {
+    const entry = dict.find((e) => e.id === id);
+    const nextIgnored = entry && entry.source === "auto" ? Array.from(new Set(ignored.concat([normalizeForMatch(entry.term)]))) : ignored;
+    return { dict: removeEntry(dict, id), ignored: nextIgnored, entry };
+  }
+
+  /**
+   * 观察结束时定位插入段：插入点之前和之后的文字都没变，才能确定用户改的是插入的那一段。
+   * @returns {string|null} 插入段的当前内容；定位不到时返回 null，不学习。
+   */
+  function locateInsertedSegment(observation, currentValue) {
+    const { before, after } = observation;
+    if (currentValue.length < before.length + after.length) return null;
+    if (!currentValue.startsWith(before) || !currentValue.endsWith(after)) return null;
+    return currentValue.slice(before.length, currentValue.length - after.length);
   }
 
   // ---------- REQ-003 DEC-004：导入导出 ----------
@@ -489,7 +663,6 @@
     { id: "welcome", title: "欢迎", required: true },
     { id: "mic", title: "麦克风", required: true },
     { id: "accessibility", title: "辅助功能", required: false },
-    { id: "input-monitoring", title: "按键监听", required: true, conditional: true },
     { id: "model", title: "语音模型", required: true },
     { id: "mic-test", title: "麦克风测试", required: false },
     { id: "hotkey", title: "快捷键", required: true },
@@ -498,8 +671,9 @@
     { id: "done", title: "完成", required: true },
   ];
 
-  function visibleSteps(needsInputMonitoring) {
-    return ONBOARDING_STEPS.filter((s) => !s.conditional || needsInputMonitoring);
+  // REQ-001 DEC-017：不申请"输入监控"，所有步骤都显示
+  function visibleSteps() {
+    return ONBOARDING_STEPS.slice();
   }
 
   /**
@@ -508,11 +682,27 @@
   function canFinishOnboarding(ctx) {
     const missing = [];
     if (ctx.micPermission !== "granted") missing.push("麦克风权限");
-    if (ctx.needsInputMonitoring && ctx.inputMonitoring !== "granted") missing.push("按键监听权限");
     if (ctx.modelStatus !== "ready") missing.push("语音模型");
     if (!ctx.hotkeyReady) missing.push("快捷键");
     if (!ctx.practiceDone) missing.push("练习");
     return { ok: missing.length === 0, missing };
+  }
+
+  // REQ-001 DEC-017：单独的 fn / 右 Option 需要辅助功能才能监听；
+  // 没有辅助功能时只能使用系统允许直接注册的"修饰键 + 普通键"组合。
+  const HOTKEYS = {
+    fn: { id: "fn", label: "fn（🌐）", needsAccessibility: true },
+    "right-option": { id: "right-option", label: "右 Option", needsAccessibility: true },
+    combo: { id: "combo", label: "⌃⇧ Space", needsAccessibility: false },
+  };
+
+  function availableHotkeys(accessibilityGranted) {
+    return Object.values(HOTKEYS).filter((h) => accessibilityGranted || !h.needsAccessibility);
+  }
+
+  function effectiveHotkey(selected, accessibilityGranted) {
+    const h = HOTKEYS[selected] || HOTKEYS.fn;
+    return accessibilityGranted || !h.needsAccessibility ? h.id : "combo";
   }
 
   function hotkeyConflict(hotkey, globeKeyAction) {
@@ -551,7 +741,15 @@
     recognize,
     polish,
     processDictation,
-    suggestFromEdit,
+    LEARN,
+    HOTKEYS,
+    extractCorrections,
+    learnFromEdit,
+    forgetEntry,
+    locateInsertedSegment,
+    soundsAlike,
+    availableHotkeys,
+    effectiveHotkey,
     parseImport,
     importEntries,
     exportCSV,

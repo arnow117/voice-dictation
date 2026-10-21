@@ -117,7 +117,7 @@
       hotkeyVerified: false,
       practiceDone: false,
       model: { id: "qwen3-asr-0.6b", status: "none", progress: 0, source: "huggingface" },
-      llm: { enabled: false, disclosureAccepted: false, keyLast4: null, keyValid: false, model: "recommended", zdr: true, zdrConfirmOff: false },
+      llm: { enabled: false, disclosureAccepted: false, keyLast4: null, keyValid: false, model: "recommended" },
       dict: [],
       history: [],
       historyEnabled: true,
@@ -149,8 +149,8 @@
       importText: "Codex,科德克斯,AI 编码工具\n王翀,王冲,同事\nOpenRouter",
       importResult: null,
       exportText: null,
-      historyEdit: null,
-      historySuggestion: null,
+      learning: { enabled: true, counts: {}, ignored: [] }, // REQ-003 DEC-007 静默学习
+      observation: null, // 插入后正在观察的那段文字
       revokedNoticeShown: false,
       demo: {
         tab: "controls",
@@ -162,7 +162,6 @@
         micSilent: false,
         indicatorAvailable: true,
         switchFocus: false,
-        needsInputMonitoring: false,
       },
       log: [],
     };
@@ -186,6 +185,7 @@
     }
     if (scenario === "copy-only") {
       s.perms.accessibility = "denied";
+      s.hotkey = "combo"; // REQ-001 DEC-017：没有辅助功能时只能用组合键
     }
     return s;
   }
@@ -207,12 +207,29 @@
     state.log = [stamp + " " + message].concat(state.log).slice(0, 40);
   }
 
+  // REQ-001 DEC-017：fn / 右 Option 需要辅助功能；没有时退化为组合键
+  function activeHotkey() {
+    return D.effectiveHotkey(state.hotkey, !copyOnly());
+  }
+
   function hotkeyLabel(hotkey) {
-    return hotkey === "fn" ? "fn（🌐）" : "右 Option";
+    return (D.HOTKEYS[hotkey] || D.HOTKEYS.fn).label;
   }
 
   function demoKeyLabel() {
-    return state.hotkey === "fn" ? "键盘 ` 键" : "键盘右 Option 键";
+    const h = activeHotkey();
+    return h === "fn" ? "键盘 ` 键" : h === "combo" ? "键盘 ⌃⇧ Space" : "键盘右 Option 键";
+  }
+
+  function hotkeyOptions(id) {
+    const active = activeHotkey();
+    return (
+      '<select id="' + id + '" data-change="set-hotkey">' +
+      D.availableHotkeys(!copyOnly())
+        .map((h) => '<option value="' + h.id + '"' + (active === h.id ? " selected" : "") + ">按住 " + esc(h.label) + (h.id === "right-option" ? "（外接键盘推荐）" : "") + "</option>")
+        .join("") +
+      "</select>"
+    );
   }
 
   function formatTime(ms) {
@@ -282,7 +299,7 @@
     }
 
     // 🌐 键与系统设置冲突：按下时系统会先弹出表情面板
-    const conflict = D.hotkeyConflict(state.hotkey, state.sys.globeKeyAction);
+    const conflict = D.hotkeyConflict(activeHotkey(), state.sys.globeKeyAction);
     if (conflict) {
       state.overlay = { kind: "emoji" };
       log("系统响应了 🌐 键：" + (state.sys.globeKeyAction === "emoji" ? "弹出表情与符号" : "开始系统听写"));
@@ -327,6 +344,7 @@
       return;
     }
 
+    finishObservation("开始下一次听写");
     state.session = { phase: "listening", startedAt: Date.now(), offset: 0, targetAtStart: currentTarget() };
     state.repair = null;
     log("麦克风已打开" + (state.soundEnabled ? " · 提示音：开始" : ""));
@@ -430,7 +448,7 @@
       stopTicking();
       state.session = null;
       log("按住少于 0.3 秒，视为误触，麦克风已释放");
-      showPill({ kind: "info", icon: "warn", text: "按住 " + hotkeyLabel(state.hotkey) + " 说话，松开结束" }, 1600);
+      showPill({ kind: "info", icon: "warn", text: "按住 " + hotkeyLabel(activeHotkey()) + " 说话，松开结束" }, 1600);
       render();
       return;
     }
@@ -486,7 +504,7 @@
       }
       session.phase = "polishing";
       const terms = state.dict.filter((e) => result.raw.includes(e.term) || result.dictionaryHits.includes(e.term)).length;
-      log("发送到 OpenRouter：文字 " + result.raw.length + " 字、相关词条 " + terms + " 个（不含音频）" + (state.llm.zdr ? " · 要求零数据保留" : ""));
+      log("发送到 OpenRouter：文字 " + result.raw.length + " 字、相关词条 " + terms + " 个（不含音频）" + " · 要求零数据保留");
       showPill({ kind: "busy", text: "整理中" });
       render();
       const delay = state.demo.llmResult === "timeout" ? 1800 : 850;
@@ -527,9 +545,11 @@
 
     if (decision.action === "insert") {
       const saved = state.clipboard;
+      const observed = session.targetAtRelease !== "practice" ? snapshotForObservation(session.targetAtRelease, result.final) : null;
       insertIntoTarget(session.targetAtRelease, result.final);
       state.clipboard = saved;
       log("已插入到「" + targetName(session.targetAtRelease) + "」，剪贴板已恢复原内容");
+      if (observed) startObservation(observed);
     } else if (decision.action === "copy") {
       state.clipboard = result.final;
       log("已复制到剪贴板（" + decision.message + "）");
@@ -578,18 +598,66 @@
     showPill(pill, result.fallbackReason || decision.action !== "insert" ? 3200 : 1500);
 
     // 辅助功能权限被撤销：首次发生时给出修复入口（DEC-003）
-    if (state.perms.accessibility === "revoked" && !state.revokedNoticeShown) {
-      state.revokedNoticeShown = true;
-      state.repair = {
-        title: "辅助功能权限已关闭",
-        body: "已切换为仅复制模式：结果会复制到剪贴板，需要你按 ⌘V 粘贴。重新允许后恢复直接插入。",
-        actions: [
-          { label: "打开系统设置", action: "open-sys-accessibility", primary: true },
-          { label: "保持仅复制", action: "repair-close" },
-        ],
-      };
-    }
+    if (state.perms.accessibility === "revoked") showRevokedNotice();
     render();
+  }
+
+  // ---------- REQ-003 DEC-007：静默学习 ----------
+  let observationTimer = null;
+
+  function snapshotForObservation(targetId, text) {
+    const t = state.targets[targetId];
+    const caret = Math.min(t.caret == null ? t.value.length : t.caret, t.value.length);
+    return { targetId, before: t.value.slice(0, caret), after: t.value.slice(caret), inserted: text };
+  }
+
+  function startObservation(obs) {
+    if (!state.learning.enabled || copyOnly()) return;
+    state.observation = Object.assign(obs, { at: Date.now() });
+    clearTimeout(observationTimer);
+    observationTimer = setTimeout(() => {
+      finishObservation("已过 " + D.RULES.learnObserveMinutes + " 分钟");
+      render();
+    }, D.RULES.learnObserveMinutes * 60000);
+    log("自动学习：开始留意刚插入的 " + obs.inserted.length + " 个字（离开输入框、开始下一次听写或 " + D.RULES.learnObserveMinutes + " 分钟后结束）");
+  }
+
+  function finishObservation(reason) {
+    const obs = state.observation;
+    if (!obs) return;
+    state.observation = null;
+    clearTimeout(observationTimer);
+    if (!state.learning.enabled || copyOnly()) return;
+    const current = D.locateInsertedSegment(obs, state.targets[obs.targetId].value);
+    if (current === null) {
+      log("自动学习（" + reason + "）：插入段前后的文字也变了，无法确定改动，本次不学习");
+      return;
+    }
+    const r = D.learnFromEdit({ inserted: obs.inserted, edited: current, dict: state.dict, ignored: state.learning.ignored, counts: state.learning.counts });
+    state.dict = r.dict;
+    state.learning.counts = r.counts;
+    if (r.reason) log("自动学习（" + reason + "）：" + r.reason);
+    r.skipped.forEach((k) => log("自动学习：未学习「" + k.wrong + " → " + k.right + "」（" + k.reason + "）"));
+    r.learned.forEach((l) => {
+      if (l.action === "added-term") log("自动学习：记住「" + l.right + "」（你把「" + l.wrong + "」改成了它）");
+      else if (l.action === "enabled-replace") log("自动学习：第 " + l.count + " 次看到「" + l.wrong + " → " + l.right + "」，以后自动替换");
+      else log("自动学习：「" + l.wrong + " → " + l.right + "」记录 1 次，再出现 1 次后自动替换");
+    });
+    log("自动学习（" + reason + "）：比较结束，读到的文字已丢弃");
+  }
+
+  function showRevokedNotice() {
+    if (state.revokedNoticeShown) return;
+    state.revokedNoticeShown = true;
+    finishObservation("辅助功能已关闭");
+    state.repair = {
+      title: "辅助功能权限已关闭",
+      body: "已切换为仅复制模式：快捷键暂时改为 ⌃⇧ Space，结果复制到剪贴板，需要你按 ⌘V 粘贴，也不会自动学习专有词。重新允许后自动恢复。",
+      actions: [
+        { label: "打开系统设置", action: "open-sys-accessibility", primary: true },
+        { label: "保持仅复制", action: "repair-close" },
+      ],
+    };
   }
 
   function targetName(id) {
@@ -640,7 +708,7 @@
 
   // ---------- Onboarding ----------
   function obSteps() {
-    return D.visibleSteps(state.demo.needsInputMonitoring);
+    return D.visibleSteps();
   }
 
   function obGo(stepId) {
@@ -652,15 +720,13 @@
   }
 
   function obConflict() {
-    return D.hotkeyConflict(state.hotkey, state.sys.globeKeyAction);
+    return D.hotkeyConflict(activeHotkey(), state.sys.globeKeyAction);
   }
 
   function obCanContinue(stepId) {
     switch (stepId) {
       case "mic":
         return state.perms.mic === "granted";
-      case "input-monitoring":
-        return state.perms.inputMonitoring === "granted" && !state.ob.restartNeeded;
       case "model":
         return state.model.status === "ready" || state.model.status === "downloading";
       case "hotkey":
@@ -693,8 +759,6 @@
   function obFinish() {
     const check = D.canFinishOnboarding({
       micPermission: state.perms.mic,
-      needsInputMonitoring: state.demo.needsInputMonitoring,
-      inputMonitoring: state.perms.inputMonitoring,
       modelStatus: state.model.status,
       hotkeyReady: state.hotkeyVerified && !obConflict(),
       practiceDone: state.practiceDone,
@@ -707,7 +771,7 @@
     state.onboardingOpen = false;
     state.ob.done.done = true;
     log("引导完成，快捷键已在所有应用中启用");
-    showPill({ kind: "info", icon: "ok", text: "闪说已就绪 · 按住 " + hotkeyLabel(state.hotkey) + " 说话" }, 2600);
+    showPill({ kind: "info", icon: "ok", text: "闪说已就绪 · 按住 " + hotkeyLabel(activeHotkey()) + " 说话" }, 2600);
   }
 
   function testKey() {
@@ -864,7 +928,9 @@
     },
     "ob-skip-accessibility": () => {
       state.ob.skipped.accessibility = true;
-      log("跳过辅助功能：使用仅复制模式");
+      state.hotkey = "combo";
+      state.hotkeyVerified = false;
+      log("跳过辅助功能：使用仅复制模式，快捷键改为 ⌃⇧ Space");
       obNext();
     },
     "ob-finish": obFinish,
@@ -881,7 +947,7 @@
     "set-hotkey": (el) => {
       state.hotkey = el.value;
       state.hotkeyVerified = false;
-      log("快捷键改为 " + hotkeyLabel(state.hotkey));
+      log("快捷键改为 " + hotkeyLabel(activeHotkey()));
     },
     "use-right-option": () => {
       state.hotkey = "right-option";
@@ -980,23 +1046,6 @@
       state.llm.enabled = false;
       log("OpenRouter Key 已从钥匙串删除，智能整理已关闭");
     },
-    "zdr-toggle": (el) => {
-      if (el.checked) {
-        state.llm.zdr = true;
-        state.llm.zdrConfirmOff = false;
-      } else {
-        state.llm.zdrConfirmOff = true;
-      }
-    },
-    "zdr-off-confirm": () => {
-      state.llm.zdr = false;
-      state.llm.zdrConfirmOff = false;
-      log("已关闭零数据保留要求");
-    },
-    "zdr-off-cancel": () => {
-      state.llm.zdrConfirmOff = false;
-    },
-
     // 词典
     "dict-add": () => {
       const f = state.dictForm;
@@ -1016,9 +1065,22 @@
       log("词典新增：" + result.entry.term);
     },
     "dict-delete": (el) => {
-      const entry = state.dict.find((e) => e.id === el.dataset.id);
-      state.dict = D.removeEntry(state.dict, el.dataset.id);
-      if (entry) log("词典删除：" + entry.term);
+      const r = D.forgetEntry(state.dict, state.learning.ignored, el.dataset.id);
+      state.dict = r.dict;
+      state.learning.ignored = r.ignored;
+      if (r.entry) log("词典删除：" + r.entry.term + (r.entry.source === "auto" ? "（自动学习词，以后不再自动学回）" : ""));
+    },
+    "learning-toggle": (el) => {
+      state.learning.enabled = el.checked;
+      if (!el.checked) {
+        state.observation = null;
+        clearTimeout(observationTimer);
+      }
+      log(el.checked ? "已开启自动学习" : "已关闭自动学习：插入后不再读取输入框");
+    },
+    "learning-clear-ignored": () => {
+      state.learning.ignored = [];
+      log("已允许重新学习删除过的词");
     },
     "dict-import": () => {
       const result = D.importEntries(state.dict, D.parseImport(state.importText));
@@ -1050,41 +1112,6 @@
         showPill({ kind: "info", icon: "ok", text: "已复制" }, 1200);
       }
     },
-    "history-edit": (el) => {
-      const h = state.history.find((x) => x.id === el.dataset.id);
-      state.historyEdit = { id: h.id, text: h.final };
-      state.historySuggestion = null;
-      focusAfterRender = { id: "history-edit-text", caret: h.final.length };
-    },
-    "history-edit-cancel": () => {
-      state.historyEdit = null;
-    },
-    "history-edit-save": () => {
-      const edit = state.historyEdit;
-      const h = state.history.find((x) => x.id === edit.id);
-      const suggestion = D.suggestFromEdit(h.final, edit.text);
-      h.final = edit.text;
-      state.historyEdit = null;
-      if (suggestion && !state.dict.some((e) => e.term === suggestion.term)) {
-        state.historySuggestion = Object.assign({ historyId: h.id }, suggestion);
-      }
-    },
-    "suggest-accept": () => {
-      const s = state.historySuggestion;
-      const result = D.addEntry(state.dict, { term: s.term, variants: [s.variant], source: "history" });
-      if (!result.ok) {
-        state.historySuggestion = Object.assign({}, s, { error: result.error });
-        return;
-      }
-      state.dict = result.dict;
-      state.historySuggestion = null;
-      log("从历史纠错加入词典：" + s.term + "（误识别写法：" + s.variant + "）");
-      showPill({ kind: "info", icon: "ok", text: "已加入词典：" + s.term }, 1600);
-    },
-    "suggest-dismiss": () => {
-      state.historySuggestion = null;
-    },
-
     // 前台应用
     "wechat-send": () => {
       const w = state.targets.wechat;
@@ -1099,20 +1126,42 @@
       state.demo.tab = el.dataset.tab;
     },
     "demo-reset": () => resetScenario(state.scenario),
+    "demo-correct": () => {
+      const obs = state.observation;
+      if (!obs) return;
+      const t = state.targets[obs.targetId];
+      const seg = D.locateInsertedSegment(obs, t.value);
+      if (seg === null) return;
+      let fixed = seg;
+      D.UTTERANCES.forEach((u) => u.misrecognitions.forEach((m) => {
+        fixed = fixed.split(m.wrong).join(m.right);
+      }));
+      if (fixed === seg) {
+        log("演示：刚插入的文字里没有可改正的误识别");
+        return;
+      }
+      t.value = obs.before + fixed + obs.after;
+      t.caret = (obs.before + fixed).length;
+      log("演示：用户在「" + targetName(obs.targetId) + "」里改正了刚插入的文字");
+    },
+    "demo-leave-field": () => finishObservation("离开输入框"),
     "demo-scenario": (el) => resetScenario(el.value),
     "demo-field": (el) => {
       const key = el.dataset.field;
       state.demo[key] = el.type === "checkbox" ? el.checked : el.value;
-      if (key === "needsInputMonitoring" && !el.checked && state.ob.step === "input-monitoring") obGo("accessibility");
     },
     "demo-target": (el) => {
+      if (state.observation && state.observation.targetId !== el.value) finishObservation("离开输入框");
       state.activeTarget = el.value;
       log("前台应用切换为「" + D.TARGET_APPS[el.value].name + "」");
     },
     "demo-perm": (el) => {
       const perm = el.dataset.perm;
       state.perms[perm] = el.value;
-      if (perm === "accessibility" && el.value === "revoked") state.revokedNoticeShown = false;
+      if (perm === "accessibility" && el.value === "revoked") {
+        state.revokedNoticeShown = false;
+        showRevokedNotice();
+      }
       log("模拟系统设置：" + permName(perm) + " → " + permStateName(el.value));
     },
     "demo-globe": (el) => {
@@ -1168,14 +1217,14 @@
     '<svg viewBox="0 0 18 14" aria-hidden="true"><g fill="currentColor"><rect x="1" y="5" width="2" height="4" rx="1"/><rect x="5" y="2" width="2" height="10" rx="1"/><rect x="9" y="0" width="2" height="14" rx="1"/><rect x="13" y="3" width="2" height="8" rx="1"/></g></svg>';
 
   function computeStatus() {
-    if (state.session && state.session.phase === "listening") return { title: "正在录音", sub: "松开 " + hotkeyLabel(state.hotkey) + " 结束 · Esc 取消" };
+    if (state.session && state.session.phase === "listening") return { title: "正在录音", sub: "松开 " + hotkeyLabel(activeHotkey()) + " 结束 · Esc 取消" };
     if (state.session) return { title: "正在处理", sub: "麦克风已关闭" };
     if (!state.onboardingDone) return { title: "设置未完成", sub: "完成引导后才能在其他应用中使用", warn: true };
     if (state.paused) return { title: "已暂停", sub: state.paused === "hour" ? "1 小时后自动恢复" : "直到你手动恢复", warn: true };
     if (state.perms.mic !== "granted") return { title: "缺少麦克风权限", sub: "按快捷键时会提示修复", warn: true };
     if (state.model.status !== "ready") return { title: "语音模型不可用", sub: "前往设置 › 语音模型", warn: true };
     if (copyOnly()) return { title: "仅复制模式", sub: "辅助功能未授权：结果复制到剪贴板", warn: true };
-    return { title: "就绪", sub: "按住 " + hotkeyLabel(state.hotkey) + " 说话" + (llmActive() ? " · 智能整理已开启" : " · 本地模式") };
+    return { title: "就绪", sub: "按住 " + hotkeyLabel(activeHotkey()) + " 说话" + (llmActive() ? " · 智能整理已开启" : " · 本地模式") };
   }
 
   function renderMenubar() {
@@ -1320,7 +1369,7 @@
 
   function renderFnKey() {
     const key = $("#fn-key");
-    key.innerHTML = (state.hotkey === "fn" ? "fn 🌐" : "右 ⌥") + "<small>按住说话</small>";
+    key.innerHTML = { fn: "fn 🌐", "right-option": "右 ⌥", combo: "⌃⇧ ␣" }[activeHotkey()] + "<small>按住说话</small>";
     key.classList.toggle("held", holdStartedAt !== null);
     $("#fn-key-caption").textContent = "演示：按住这个键，或按住" + demoKeyLabel() + "。Esc 取消。";
   }
@@ -1442,7 +1491,7 @@
       case "welcome":
         return (
           "<h2>按住说话，松开就是文字</h2>" +
-          '<p class="lead">在任何应用里按住 ' + hotkeyLabel(state.hotkey) + " 说话，松开后文字会出现在当前输入框。开始前，先说清楚三件事：</p>" +
+          '<p class="lead">在任何应用里按住 ' + hotkeyLabel(activeHotkey()) + " 说话，松开后文字会出现在当前输入框。开始前，先说清楚三件事：</p>" +
           '<div class="promise"><span class="num">1</span><div><strong>录音时一定有提示</strong><p>屏幕底部的录音胶囊和菜单栏图标会同时亮起，松开按键立即停止录音。</p></div></div>' +
           '<div class="promise"><span class="num">2</span><div><strong>声音只在本机识别</strong><p>音频不上传、不保存到磁盘，识别完成即丢弃。</p></div></div>' +
           '<div class="promise"><span class="num">3</span><div><strong>云端整理由你决定</strong><p>智能整理默认关闭。开启后只把文字发送到你自己配置的 OpenRouter 模型。</p></div></div>' +
@@ -1460,23 +1509,13 @@
         );
       case "accessibility":
         return (
-          "<h2>允许把文字直接插入输入框</h2>" +
-          '<p class="lead">macOS 把这项能力放在「辅助功能」权限里。闪说只用它把文字放到光标处，不读取屏幕内容或其他应用里的文字。</p>' +
+          "<h2>允许闪说在其他应用中工作</h2>" +
+          '<p class="lead">macOS 把这三项能力都放在「辅助功能」权限里：在任何应用中按住 fn 说话；把文字直接放到光标处；插入后看看你有没有改动刚插入的那段文字，用来记住专有词。</p>' +
+          '<p class="small muted">闪说不读取屏幕上的其他内容；为了学习而读到的文字只在内存中比较，比较完即丢弃。自动学习可以在设置 › 词典中关闭。</p>' +
           (p.accessibility === "granted"
-            ? '<div class="callout ok">已允许，识别结果会直接插入当前输入框。</div>'
+            ? '<div class="callout ok">已允许：可以按住 fn 或右 Option 说话，结果直接插入当前输入框。</div>'
             : '<div class="row"><button type="button" class="btn primary" data-action="open-sys-accessibility">打开系统设置</button><button type="button" class="btn" data-action="ob-skip-accessibility">稍后再说</button></div>' +
-              '<div class="callout">稍后再说也可以使用：结果会复制到剪贴板，需要你按 ⌘V 粘贴（仅复制模式）。随时可以在菜单栏开启直接插入。</div>')
-        );
-      case "input-monitoring":
-        return (
-          "<h2>允许监听快捷键</h2>" +
-          '<p class="lead">用于识别你按住和松开快捷键。只响应你设置的快捷键，不记录其他按键。</p>' +
-          '<p class="small muted">（演示设置中标明：是否需要这一步取决于 plan 阶段的工程方案。）</p>' +
-          (p.inputMonitoring === "granted"
-            ? state.ob.restartNeeded
-              ? '<div class="callout warn">macOS 需要重新打开闪说，这项权限才会生效。引导进度会保留。</div><div class="row"><button type="button" class="btn primary" data-action="restart-app">重新打开</button></div>'
-              : '<div class="callout ok">已允许，快捷键可以在所有应用中使用。</div>'
-            : '<div class="row"><button type="button" class="btn primary" data-action="open-sys-input">打开系统设置</button></div>')
+              '<div class="callout">稍后再说也可以使用：快捷键改为 ⌃⇧ Space，结果复制到剪贴板，需要你按 ⌘V 粘贴（仅复制模式），也不会自动学习专有词。随时可以在菜单栏开启。</div>')
         );
       case "model":
         return (
@@ -1506,7 +1545,8 @@
         return (
           "<h2>设置快捷键</h2>" +
           '<p class="lead">按住快捷键说话，松开结束。当前只支持按住式。</p>' +
-          '<div class="field"><label for="ob-hotkey">快捷键</label><select id="ob-hotkey" data-change="set-hotkey"><option value="fn"' + (state.hotkey === "fn" ? " selected" : "") + '>按住 fn（🌐）</option><option value="right-option"' + (state.hotkey === "right-option" ? " selected" : "") + ">按住 右 Option（外接键盘推荐）</option></select></div>" +
+          '<div class="field"><label for="ob-hotkey">快捷键</label>' + hotkeyOptions("ob-hotkey") + "</div>" +
+          (copyOnly() ? '<div class="callout small">未开启辅助功能时只能使用组合键 ⌃⇧ Space。开启后可以改用 fn 或右 Option。</div>' : "") +
           (conflict
             ? '<div class="callout warn">' + esc(conflict) + '。</div><div class="row"><button type="button" class="btn primary" data-action="open-sys-keyboard">打开键盘设置</button><button type="button" class="btn" data-action="use-right-option">改用右 Option</button></div>'
             : state.hotkeyVerified
@@ -1523,7 +1563,7 @@
             "<h2>智能整理（可选）</h2>" +
             '<p class="lead">把口语整理成书面文字：去掉口头禅、保留改口后的说法、补标点，把「第一、第二」整理成编号列表。</p>' +
             dataFlow() +
-            '<div class="callout warn">开启后，识别出的文字会发送到你选择的 OpenRouter 模型。默认要求零数据保留路由；音频始终不会上传。不开启也能正常使用，只是保留原话。</div>'
+            '<div class="callout warn">开启后，识别出的文字会发送到你选择的 OpenRouter 模型。始终要求零数据保留路由；音频始终不会上传。不开启也能正常使用，只是保留原话。</div>'
           );
         }
         return (
@@ -1532,8 +1572,7 @@
           keyField("ob-key") +
           (state.llm.keyValid ? '<div class="callout ok">连接成功，Key 末四位 ' + esc(state.llm.keyLast4) + "。</div>" : "") +
           '<div class="field"><label for="ob-llm-model">整理模型</label>' + llmModelSelect("ob-llm-model") + "</div>" +
-          '<div class="row"><label class="switch"><input type="checkbox" id="ob-zdr" data-change="zdr-toggle"' + (state.llm.zdr ? " checked" : "") + ' aria-label="要求零数据保留"><span></span></label><span class="small">要求零数据保留（只路由到不保存请求的服务商）</span></div>' +
-          (state.llm.zdrConfirmOff ? zdrConfirm() : "")
+          '<p class="small muted">始终要求零数据保留：只路由到承诺不保存请求内容的服务商。</p>'
         );
       case "practice":
         return (
@@ -1551,12 +1590,12 @@
         const row = (label, value, ok) => '<div class="item"><span class="label"><strong>' + label + '</strong></span><span class="tag ' + (ok ? "ok" : "warn") + '">' + value + "</span></div>";
         return (
           "<h2>准备好了</h2>" +
-          '<p class="lead">在任何应用中按住 ' + hotkeyLabel(state.hotkey) + " 说话。录音时屏幕底部会一直显示胶囊。</p>" +
+          '<p class="lead">在任何应用中按住 ' + hotkeyLabel(activeHotkey()) + " 说话。录音时屏幕底部会一直显示胶囊。</p>" +
           '<div class="group">' +
           row("麦克风", p.mic === "granted" ? "已允许" : "未允许", p.mic === "granted") +
           row("插入方式", p.accessibility === "granted" ? "直接插入" : "仅复制模式", p.accessibility === "granted") +
           row("语音模型", state.model.status === "ready" ? D.MODELS[state.model.id].name : "下载中 " + state.model.progress + "%", state.model.status === "ready") +
-          row("快捷键", hotkeyLabel(state.hotkey), state.hotkeyVerified && !obConflict()) +
+          row("快捷键", hotkeyLabel(activeHotkey()), state.hotkeyVerified && !obConflict()) +
           row("智能整理", state.llm.enabled ? "已开启" : "本地模式", true) +
           "</div>" +
           (state.ob.finishError ? '<div class="callout bad" role="alert">' + esc(state.ob.finishError) + "</div>" : "")
@@ -1565,13 +1604,6 @@
       default:
         return "";
     }
-  }
-
-  function zdrConfirm() {
-    return (
-      '<div class="callout warn">关闭后，请求可能被路由到会保留或用于训练的服务商。确定关闭吗？' +
-      '<div class="row" style="margin-top:8px"><button type="button" class="btn danger" data-action="zdr-off-confirm">关闭零数据保留</button><button type="button" class="btn" data-action="zdr-off-cancel">保持开启</button></div></div>'
-    );
   }
 
   function obFooter(step) {
@@ -1624,7 +1656,7 @@
     return (
       "<h3>通用</h3>" +
       '<div class="group">' +
-      '<div class="item"><span class="label"><strong>快捷键</strong><span>按住说话，松开结束。当前只支持按住式。</span></span><select id="set-hotkey" data-change="set-hotkey"><option value="fn"' + (state.hotkey === "fn" ? " selected" : "") + '>按住 fn（🌐）</option><option value="right-option"' + (state.hotkey === "right-option" ? " selected" : "") + ">按住 右 Option</option></select></div>" +
+      '<div class="item"><span class="label"><strong>快捷键</strong><span>' + (copyOnly() ? "未开启辅助功能：只能使用组合键 ⌃⇧ Space。" : "按住说话，松开结束。当前只支持按住式。") + "</span></span>" + hotkeyOptions("set-hotkey") + "</div>" +
       (conflict ? '<div class="item"><span class="label"><strong style="color:var(--warning)">快捷键冲突</strong><span>' + esc(conflict) + '</span></span><button type="button" class="btn" data-action="open-sys-keyboard">打开键盘设置</button></div>' : "") +
       '<div class="item"><span class="label"><strong>录音提示</strong><span>录音胶囊和菜单栏录音状态始终显示，不能关闭。</span></span><span class="tag ok">始终显示</span></div>' +
       '<div class="item"><span class="label"><strong>提示音</strong><span>开始和结束录音时播放轻提示音。</span></span>' + sw("set-sound", "toggle-sound", state.soundEnabled, "提示音") + "</div>" +
@@ -1633,7 +1665,7 @@
       "<h3>权限</h3>" +
       '<div class="group">' +
       '<div class="item"><span class="label"><strong>麦克风</strong><span>按住快捷键时录音。</span></span>' + (state.perms.mic === "granted" ? '<span class="tag ok">已允许</span>' : '<button type="button" class="btn primary" data-action="open-sys-mic">打开系统设置</button>') + "</div>" +
-      '<div class="item"><span class="label"><strong>辅助功能（直接插入）</strong><span>' + (copyOnly() ? "未授权：使用仅复制模式，结果复制到剪贴板，需要按 ⌘V 粘贴。" : "已授权：识别结果直接插入当前输入框。") + "</span></span>" + (copyOnly() ? '<button type="button" class="btn primary" data-action="open-sys-accessibility">开启直接插入</button>' : '<span class="tag ok">已允许</span>') + "</div>" +
+      '<div class="item"><span class="label"><strong>辅助功能</strong><span>' + (copyOnly() ? "未授权：快捷键只能用 ⌃⇧ Space，结果复制到剪贴板需要按 ⌘V 粘贴，不会自动学习专有词。" : "已授权：fn / 右 Option 快捷键、直接插入、从你的修改中学习专有词。") + "</span></span>" + (copyOnly() ? '<button type="button" class="btn primary" data-action="open-sys-accessibility">开启</button>' : '<span class="tag ok">已允许</span>') + "</div>" +
       "</div>"
     );
   }
@@ -1680,14 +1712,20 @@
       '<div class="group">' +
       '<div class="item"><span class="label"><strong>开启智能整理</strong><span>识别出的文字会发送到你配置的 OpenRouter 模型，整理成书面文本。音频不会上传。</span></span>' + sw("set-llm", "llm-toggle", l.enabled, "开启智能整理") + "</div>" +
       (l.toggleError ? '<div class="item"><div class="callout bad" style="flex:1">' + esc(l.toggleError) + "</div></div>" : "") +
-      (l.showDisclosure ? '<div class="item" style="display:block"><div class="stack">' + dataFlow() + '<div class="callout warn">开启后，识别出的文字和相关词典词条会发送到 OpenRouter。默认要求零数据保留路由。</div><div class="row"><button type="button" class="btn primary" data-action="llm-accept-disclosure">我了解，继续</button></div></div></div>' : "") +
+      (l.showDisclosure ? '<div class="item" style="display:block"><div class="stack">' + dataFlow() + '<div class="callout warn">开启后，识别出的文字和相关词典词条会发送到 OpenRouter。始终要求零数据保留路由（只路由到承诺不保存请求内容的服务商）。</div><div class="row"><button type="button" class="btn primary" data-action="llm-accept-disclosure">我了解，继续</button></div></div></div>' : "") +
       keyBlock +
       '<div class="item"><span class="label"><strong>整理模型</strong><span>默认模型由 plan 阶段评测确定。</span></span>' + llmModelSelect("set-llm-model") + "</div>" +
-      '<div class="item"><span class="label"><strong>要求零数据保留</strong><span>只路由到不保存请求内容的服务商。</span></span>' + sw("set-zdr", "zdr-toggle", l.zdr && !l.zdrConfirmOff, "要求零数据保留") + "</div>" +
-      (l.zdrConfirmOff ? '<div class="item" style="display:block">' + zdrConfirm() + "</div>" : "") +
+      '<div class="item"><span class="label"><strong>零数据保留</strong><span>只路由到承诺不保存请求内容的服务商，不能关闭。</span></span><span class="tag ok">始终开启</span></div>' +
       "</div>" +
       '<div class="callout small">整理规则：去口头禅、保留改口后的说法、补标点和分段、口述序号转编号列表、数字规范化。不增删事实，不回答或执行你说的内容。整理失败或 5 秒内未返回时，插入本地识别的原文。</div>'
     );
+  }
+
+  function variantsCell(e) {
+    const confirmed = e.variants.map(esc);
+    const pending = (e.pendingVariants || []).map((v) => '<span class="muted" title="同样的改正再出现 1 次后，识别成这个写法时会自动替换">' + esc(v) + "（再改正 1 次后自动替换）</span>");
+    const all = confirmed.concat(pending);
+    return all.length ? all.join("、") : '<span class="muted">—</span>';
   }
 
   function settingsDictionary() {
@@ -1696,13 +1734,25 @@
       ? state.dict
           .map(
             (e) =>
-              "<tr><td><strong>" + esc(e.term) + "</strong>" + (e.note ? '<div class="small muted">' + esc(e.note) + "</div>" : "") + "</td><td>" + (e.variants.length ? e.variants.map(esc).join("、") : '<span class="muted">—</span>') + "</td><td>" + { manual: "手动", history: "历史纠错", import: "导入" }[e.source] + "</td><td>" + e.hits + '</td><td><button type="button" class="btn link" data-action="dict-delete" data-id="' + e.id + '" aria-label="删除 ' + esc(e.term) + '">删除</button></td></tr>'
+              "<tr><td><strong>" + esc(e.term) + "</strong>" + (e.note ? '<div class="small muted">' + esc(e.note) + "</div>" : "") + "</td><td>" + variantsCell(e) + "</td><td>" + ({ manual: "手动", auto: '<span class="tag">自动学习</span>', import: "导入" }[e.source] || "手动") + "</td><td>" + e.hits + '</td><td><button type="button" class="btn link" data-action="dict-delete" data-id="' + e.id + '" aria-label="删除 ' + esc(e.term) + '">删除</button></td></tr>'
           )
           .join("")
-      : '<tr><td colspan="5" class="empty">词典是空的。添加你常说的人名、产品名或术语。</td></tr>';
+      : '<tr><td colspan="5" class="empty">词典是空的。添加你常说的人名、产品名或术语；你在插入后改正过的专有词也会自动出现在这里。</td></tr>';
+    const L = state.learning;
+    const learningBlock =
+      '<div class="group"><div class="item"><span class="label"><strong>从我的修改中自动学习</strong><span>' +
+      (copyOnly()
+        ? "需要辅助功能权限，仅复制模式下不可用。"
+        : "插入后，如果你把刚插入文字里的专有词改对了，闪说会记住正确写法，不弹窗打扰。只比较刚插入的那一段，比较完即丢弃。") +
+      "</span></span>" + sw("set-learning", "learning-toggle", L.enabled && !copyOnly(), "从我的修改中自动学习", copyOnly()) + "</div>" +
+      (L.ignored.length
+        ? '<div class="item"><span class="label"><strong>不再自动学习的词</strong><span>你删除过的 ' + L.ignored.length + " 个自动学习词不会被再次学回：" + L.ignored.map(esc).join("、") + '</span></span><button type="button" class="btn" data-action="learning-clear-ignored">允许重新学习</button></div>'
+        : "") +
+      "</div>";
     return (
       "<h3>词典</h3>" +
       '<p class="small muted" style="margin:0">' + state.dict.length + " 条 · 至少支持 " + D.RULES.dictionaryMinCapacity + " 条，只保存在本机。词典在三处生效：识别前提示（Qwen3-ASR）、识别后替换误识别写法、智能整理时交给模型。</p>" +
+      learningBlock +
       '<div class="group"><div class="item" style="display:block"><div class="stack">' +
       '<div class="row" style="align-items:flex-start">' +
       '<div class="field" style="flex:1"><label for="dict-term">正确写法</label><input id="dict-term" data-input="dictForm.term" value="' + esc(f.term) + '" placeholder="如：Codex"' + (f.error ? ' aria-invalid="true"' : "") + " /></div>" +
@@ -1724,22 +1774,18 @@
 
   function settingsHistory() {
     const actionTag = { insert: '<span class="tag ok">已插入</span>', copy: '<span class="tag warn">已复制</span>' };
-    const s = state.historySuggestion;
     const items = state.history.length
       ? state.history
           .map((h) => {
-            const editing = state.historyEdit && state.historyEdit.id === h.id;
             return (
               '<div class="history-item"><div class="row"><strong>' + esc(h.app) + '</strong><span class="small muted">' + relTime(h.at) + "</span>" + actionTag[h.action] +
               (h.polished ? '<span class="tag">已整理</span>' : "") +
               (h.fallbackReason ? '<span class="tag warn">整理失败：' + esc(h.fallbackReason) + "</span>" : "") +
               "</div>" +
-              (editing
-                ? '<textarea id="history-edit-text" rows="3" class="practice-box" data-input="historyEdit.text" aria-label="编辑这条记录">' + esc(state.historyEdit.text) + '</textarea><div class="row"><button type="button" class="btn primary" data-action="history-edit-save">保存</button><button type="button" class="btn" data-action="history-edit-cancel">取消</button></div>'
-                : "<pre>" + esc(h.final) + "</pre>") +
+              "<pre>" + esc(h.final) + "</pre>" +
               (h.polished && h.raw !== h.final ? '<div class="raw">识别原文：' + esc(h.raw) + "</div>" : "") +
               (h.hits && h.hits.length ? '<div class="raw">词典生效：' + h.hits.map(esc).join("、") + "</div>" : "") +
-              (!editing ? '<div class="row"><button type="button" class="btn link" data-action="history-copy" data-id="' + h.id + '">复制</button><button type="button" class="btn link" data-action="history-edit" data-id="' + h.id + '">纠错</button><button type="button" class="btn link" data-action="history-delete" data-id="' + h.id + '">删除</button></div>' : "") +
+              '<div class="row"><button type="button" class="btn link" data-action="history-copy" data-id="' + h.id + '">复制</button><button type="button" class="btn link" data-action="history-delete" data-id="' + h.id + '">删除</button></div>' +
               "</div>"
             );
           })
@@ -1748,12 +1794,6 @@
     return (
       "<h3>历史</h3>" +
       '<div class="group"><div class="item"><span class="label"><strong>保存历史</strong><span>只保存文字，不保存音频。本机保存 ' + D.RULES.historyRetentionDays + ' 天，到期自动删除。</span></span><div class="row">' + sw("set-history", "history-toggle", state.historyEnabled, "保存历史") + '<button type="button" class="btn danger" data-action="history-clear"' + (state.history.length ? "" : " disabled") + ">清空</button></div></div></div>" +
-      (s
-        ? '<div class="callout ok" role="status">要把「' + esc(s.term) + "」加入词典吗？以后识别成「" + esc(s.variant) + "」时会自动改成正确写法。" +
-          '<div class="row" style="margin-top:8px"><label class="small" for="suggest-term">正确写法</label><input id="suggest-term" style="padding:5px 8px;border:1px solid var(--border-strong);border-radius:6px" data-input="historySuggestion.term" value="' + esc(s.term) + '" /><span class="small muted">误识别写法：' + esc(s.variant) + "</span></div>" +
-          (s.error ? '<div class="error small">' + esc(s.error) + "</div>" : "") +
-          '<div class="row" style="margin-top:8px"><button type="button" class="btn primary" data-action="suggest-accept">加入词典</button><button type="button" class="btn" data-action="suggest-dismiss">不用</button></div></div>'
-        : "") +
       '<div class="group">' + items + "</div>"
     );
   }
@@ -1762,9 +1802,10 @@
     const rows = [
       ["录音音频", "只在内存中，识别完成即丢弃", "不保存"],
       ["识别文字历史", "本机", D.RULES.historyRetentionDays + " 天，可关闭或清空"],
-      ["个人词典", "本机", "直到你删除"],
+      ["个人词典（含自动学习的词）", "本机", "直到你删除"],
+      ["自动学习时读到的文字", "只在内存中比较刚插入的那一段", state.learning.enabled && !copyOnly() ? "比较完即丢弃" : "未开启"],
       ["OpenRouter Key", "macOS 钥匙串", "直到你删除"],
-      ["发送到云端的内容", llmActive() ? "OpenRouter：文字和相关词条" : "无（智能整理未开启）", llmActive() ? (state.llm.zdr ? "要求零数据保留" : "取决于服务商") : "—"],
+      ["发送到云端的内容", llmActive() ? "OpenRouter：文字和相关词条" : "无（智能整理未开启）", llmActive() ? "要求零数据保留" : "—"],
       ["使用统计与遥测", "不收集", "—"],
     ];
     return (
@@ -1809,7 +1850,7 @@
   const SCENARIO_NOTES = [
     ["SCN-001", "首次引导走完", "场景「新用户」，按步骤授权、下载模型、试快捷键、练习后点「开始使用」"],
     ["SCN-002", "拒绝麦克风后恢复", "麦克风步骤点「不允许」→「打开系统设置」→ 打开开关，自动检测并返回"],
-    ["SCN-003", "跳过辅助功能 → 仅复制模式", "辅助功能步骤点「稍后再说」；完成后说话，结果进剪贴板"],
+    ["SCN-003", "跳过辅助功能 → 仅复制模式", "辅助功能步骤点「稍后再说」→ 快捷键变为 ⌃⇧ Space；完成后说话，结果进剪贴板"],
     ["SCN-004", "模型下载中断与恢复", "勾选「模型下载中途断网」后下载 → 40% 中断 → 重试或切换镜像"],
     ["SCN-005", "🌐 键冲突修复", "快捷键步骤按住键会弹出表情面板 → 打开键盘设置改为「不执行任何操作」或改用右 Option"],
     ["SCN-006", "按住说话插入备忘录", "场景「已完成引导 · 本地模式」，点击备忘录正文后按住快捷键"],
@@ -1823,7 +1864,8 @@
     ["SCN-014", "列表、改口与指令", "场景「已开启智能整理」，分别选择序号列表、句中列表、口头禅与改口、指令注入"],
     ["SCN-015", "整理失败回退原文", "把智能整理结果改为超时/网络/Key 无效/额度不足后说话"],
     ["SCN-016", "专有词生效", "场景「本地模式」，说「专有词」→ 识别错；词典添加 Codex 后再说 → 识别前提示修正"],
-    ["SCN-017", "历史纠错加入词典", "设置 › 历史 → 纠错，把「王冲」改成「王翀」→ 提示加入词典"],
+    ["SCN-017", "静默学习专有词", "场景「本地模式」，说「新专有词」→ 插入后在备忘录里把「马纳斯」「李丽」改对（或点「模拟：改正刚插入的文字」）→ 切换前台应用或再说一次 → 词典出现两条「自动学习」，没有弹窗；再说一次就写对"],
+    ["SCN-020", "不该学的修改不学", "把插入的「周三」改成「周四」，或整句改写 → 事件日志显示未学习及原因；删除自动学习词后同样的改正不再学回"],
     ["SCN-018", "导入导出与冲突", "设置 › 词典 → 导入示例文本 → 查看新增/跳过/冲突计数 → 导出 CSV"],
     ["SCN-019", "历史保留 7 天", "点两次「时间快进 3 天」，超过 7 天的历史被清理"],
   ];
@@ -1850,14 +1892,15 @@
     if (state.demo.tab === "notes") {
       body =
         '<div class="notes">' +
-        "<p>v0.2 · 覆盖 REQ-001～003 的首发体验。所有系统弹窗、权限、模型、OpenRouter 和剪贴板都是本地模拟；状态只在内存中，刷新页面会重置。</p>" +
+        "<p>v0.3 · 覆盖 REQ-001～003 的首发体验。所有系统弹窗、权限、模型、OpenRouter 和剪贴板都是本地模拟；状态只在内存中，刷新页面会重置。</p>" +
         "<h3>验收场景</h3><ul>" +
         SCENARIO_NOTES.map((s) => "<li><strong>" + s[0] + " " + esc(s[1]) + "</strong>：" + esc(s[2]) + "</li>").join("") +
         "</ul>" +
         "<h3>不代表的东西</h3><ul>" +
         "<li>识别结果是按预设句子模拟的，不代表模型真实准确率或延迟。</li>" +
         "<li>浏览器无法捕获 fn 键，用屏幕上的按键或 <code>`</code> / 右 Option 代替。</li>" +
-        "<li>「按键监听」步骤是否出现取决于 plan 阶段的工程方案。</li>" +
+        "<li>自动学习判断读音是否相近时，原型只用一张覆盖演示句子的小拼音表；生产实现使用完整拼音库。</li>" +
+        "<li>原型里自动学习的观察时长为真实的 2 分钟；用「模拟：离开输入框」可以立刻结束。</li>" +
         "<li>整理模型选项是示例，默认模型由 plan 阶段评测确定。</li>" +
         "</ul></div>";
     } else {
@@ -1877,7 +1920,10 @@
         demoCheck("micSilent", "麦克风无声") +
         demoCheck("indicatorAvailable", "录音提示可以显示") +
         demoCheck("switchFocus", "处理期间切换焦点") +
-        demoCheck("needsInputMonitoring", "工程方案需要「输入监控」权限") +
+        "</fieldset>" +
+        "<fieldset><legend>自动学习（模拟你在输入框里改字）</legend>" +
+        '<p class="small muted" style="margin:0 0 6px">' + (state.observation ? "正在留意「" + esc(targetName(state.observation.targetId)) + "」中刚插入的 " + state.observation.inserted.length + " 个字。可以直接在输入框里改，也可以用下面的按钮。" : "当前没有在留意的文字。插入一段后才会开始。") + "</p>" +
+        '<div class="row"><button type="button" class="btn" data-action="demo-correct"' + (state.observation ? "" : " disabled") + '>模拟：改正刚插入的文字</button><button type="button" class="btn" data-action="demo-leave-field"' + (state.observation ? "" : " disabled") + ">模拟：离开输入框</button></div>" +
         "</fieldset>" +
         "<fieldset><legend>系统设置（模拟）</legend>" +
         permSelect("mic", ["not-determined", "granted", "denied"]) +
@@ -2002,7 +2048,15 @@
   });
 
   function isHotkeyEvent(event) {
-    return state.hotkey === "fn" ? event.code === "Backquote" : event.code === "AltRight";
+    const h = activeHotkey();
+    if (h === "combo") return event.code === "Space" && event.ctrlKey && event.shiftKey;
+    return h === "fn" ? event.code === "Backquote" : event.code === "AltRight";
+  }
+
+  // 组合键：松开其中任意一个键都算结束
+  function isHotkeyRelease(event) {
+    if (activeHotkey() === "combo") return ["Space", "ControlLeft", "ControlRight", "ShiftLeft", "ShiftRight"].includes(event.code);
+    return isHotkeyEvent(event);
   }
 
   document.addEventListener("keydown", (event) => {
@@ -2026,7 +2080,7 @@
   });
 
   document.addEventListener("keyup", (event) => {
-    if (isHotkeyEvent(event)) {
+    if (isHotkeyRelease(event) && (holdStartedAt !== null || isHotkeyEvent(event))) {
       event.preventDefault();
       endHold();
     }
