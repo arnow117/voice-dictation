@@ -1,0 +1,4 @@
+.DS_Store
+.work/
+node_modules/
+dist/

@@ -1,0 +1,50 @@
+{
+  "features": {},
+  "requirements": {
+    "REQ-001": {
+      "created_at": "2026-10-21T11:25:28Z",
+      "depends_on": [],
+      "description": "Onboarding 与权限引导、按住说话、本地中英 ASR、插入活跃输入框、录音提示与隐私控制",
+      "domain": "desktop-voice-input",
+      "feature_id": null,
+      "id": "REQ-001",
+      "priority": "P0",
+      "product_context_ref": ".sdlc-v1/context/REQ-001.product.md",
+      "status": "captured",
+      "title": "按住快捷键语音输入核心闭环",
+      "updated_at": "2026-10-21T11:25:28Z"
+    },
+    "REQ-002": {
+      "created_at": "2026-10-21T11:25:28Z",
+      "depends_on": [
+        "REQ-001"
+      ],
+      "description": "用 OpenRouter 模型整理口语、口述序号转列表、失败回退、知情开启",
+      "domain": "desktop-voice-input",
+      "feature_id": null,
+      "id": "REQ-002",
+      "priority": "P1",
+      "product_context_ref": ".sdlc-v1/context/REQ-002.product.md",
+      "status": "captured",
+      "title": "识别文本书面化与结构化整理（OpenRouter）",
+      "updated_at": "2026-10-21T11:25:28Z"
+    },
+    "REQ-003": {
+      "created_at": "2026-10-21T11:25:28Z",
+      "depends_on": [
+        "REQ-001"
+      ],
+      "description": "词典作用于识别前提示、识别后替换与整理；手动与历史纠错添加；导入导出",
+      "domain": "desktop-voice-input",
+      "feature_id": null,
+      "id": "REQ-003",
+      "priority": "P1",
+      "product_context_ref": ".sdlc-v1/context/REQ-003.product.md",
+      "status": "captured",
+      "title": "专有词与个人词典",
+      "updated_at": "2026-10-21T11:25:28Z"
+    }
+  },
+  "state_format": "sdlc-lightweight-state-v1",
+  "state_version": 3
+}
