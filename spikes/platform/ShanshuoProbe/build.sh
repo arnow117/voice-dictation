@@ -9,11 +9,14 @@ ROOT=/Users/arnow117/hansen_agent_team/workspace/20261021-voice-dictation
 OUT_DIR="${OUT_DIR:-$ROOT/.work/t002}"
 SIGN_DIR="$ROOT/.work/signing"
 APP="$OUT_DIR/ShanshuoProbe.app"
+# Build into a staging bundle and swap it in, so a running copy is never overwritten in place.
+STAGE="$OUT_DIR/.stage/ShanshuoProbe.app"
 BUILD_ID="$(date +%Y%m%d-%H%M%S)"
 LOG_PATH="$OUT_DIR/probe-log.jsonl"
 
-mkdir -p "$APP/Contents/MacOS" "$OUT_DIR/.mc"
-cat > "$APP/Contents/Info.plist" <<EOF
+rm -rf "$STAGE"
+mkdir -p "$STAGE/Contents/MacOS" "$OUT_DIR/.mc"
+cat > "$STAGE/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -26,7 +29,7 @@ cat > "$APP/Contents/Info.plist" <<EOF
   <key>CFBundleVersion</key><string>$BUILD_ID</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>NSHighResolutionCapable</key><true/>
-  <key>NSMicrophoneUsageDescription</key><string>闪说探测只检查麦克风授权状态，不录音。</string>
+  <key>NSMicrophoneUsageDescription</key><string>闪说探测在你按住快捷键时采集麦克风，只计算音量和时长，不保存音频。</string>
   <key>ProbeBuildID</key><string>$BUILD_ID</string>
   <key>ProbeLogPath</key><string>$LOG_PATH</string>
 </dict></plist>
@@ -42,11 +45,13 @@ EOF
 
 swiftc -O -swift-version 5 -target arm64-apple-macos14.0 -module-cache-path "$OUT_DIR/.mc" \
   -framework AppKit -framework Carbon -framework ApplicationServices -framework AVFoundation \
-  "$HERE/main.swift" -o "$APP/Contents/MacOS/ShanshuoProbe"
+  "$HERE/main.swift" -o "$STAGE/Contents/MacOS/ShanshuoProbe"
 
 security unlock-keychain -p "$(cat "$SIGN_DIR/keychain-password")" "$SIGN_DIR/shanshuo-signing.keychain-db"
 codesign --force --options runtime --entitlements "$OUT_DIR/entitlements.plist" \
-  -s "Shanshuo Test Signing" "$APP"
-codesign --verify --strict "$APP"
+  -s "Shanshuo Test Signing" "$STAGE"
+codesign --verify --strict "$STAGE"
+rm -rf "$APP"
+mv "$STAGE" "$APP"
 echo "built $APP (build $BUILD_ID)"
 codesign -d -r- "$APP" 2>&1 | tail -1

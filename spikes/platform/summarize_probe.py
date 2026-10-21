@@ -80,6 +80,21 @@ def main(path):
             w(f"| {name(b)} | {n} | {Counter(r['visible'] for r in rs)} | {Counter(r['on_active_space'] for r in rs)} |")
     w("")
 
+    w("## 3.1 麦克风采集\n")
+    st = by["mic_started"]
+    if st:
+        sm = [r["start_ms"] for r in st]
+        sk = [r["ms_since_key"] for r in st]
+        fb = [r["ms_since_key"] for r in by["mic_first_buffer"]]
+        w(f"启动 {len(st)} 次；engine.start 耗时 P50 {statistics.median(sm):.0f} ms、最大 {max(sm)} ms；"
+          f"从按键到开始采集 P50 {statistics.median(sk):.0f} ms；从按键到第一块音频 P50 {statistics.median(fb) if fb else '—'} ms、"
+          f"最大 {max(fb) if fb else '—'} ms；采样率 {Counter(r['sample_rate'] for r in st)}")
+        ends = [r for r in by["hold_end"] if r.get("captured_s", -1) >= 0]
+        if ends:
+            gap = [r["held_ms"] / 1000 - r["captured_s"] for r in ends]
+            w(f"\n按住时长减去采到的音频时长（即开头和结尾丢掉的部分）：P50 {statistics.median(gap):.2f} s、最大 {max(gap):.2f} s；"
+              f"峰值音量 P50 {statistics.median(r['peak'] for r in ends):.2f}")
+    w(f"\n采集失败 {len(by['mic_start_failed'])} 次；因未授权跳过 {len(by['mic_skipped'])} 次\n")
     w("## 4. 插入（按应用 × 方式）\n")
     verdicts = {}
     for r in by["manual_verdict"]:

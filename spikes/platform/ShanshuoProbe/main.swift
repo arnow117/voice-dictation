@@ -376,8 +376,10 @@ enum Keys {
 
 final class Capsule {
     private let panel: NSPanel
+    private var label: NSTextField?
+    private var baseText = ""
     init() {
-        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 230, height: 40),
+        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 300, height: 40),
                         styleMask: [.nonactivatingPanel, .borderless], backing: .buffered, defer: false)
         panel.level = .statusBar
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
@@ -395,11 +397,18 @@ final class Capsule {
         dot.layer?.cornerRadius = 6
         let label = NSTextField(labelWithString: "闪说 · 正在录音（探测）")
         label.textColor = .white
-        label.font = .systemFont(ofSize: 13, weight: .medium)
-        label.frame = NSRect(x: 38, y: 10, width: 180, height: 20)
+        label.font = .monospacedSystemFont(ofSize: 13, weight: .medium)
+        label.frame = NSRect(x: 38, y: 10, width: 250, height: 20)
         box.addSubview(dot)
         box.addSubview(label)
         panel.contentView = box
+        self.label = label
+    }
+
+    /// Peak level 0...1 shown as a bar so the user can see capture is live.
+    func setLevel(_ peak: Float) {
+        let n = min(8, Int((peak * 12).rounded(.up)))
+        label?.stringValue = baseText + " " + String(repeating: "▮", count: n) + String(repeating: "▯", count: 8 - n)
     }
 
     /// Screen of the frontmost app's focused window (AX); falls back to the screen under the mouse.
@@ -419,7 +428,9 @@ final class Capsule {
         return (NSScreen.screens.first(where: { $0.frame.contains(m) }) ?? NSScreen.main!, "mouse")
     }
 
-    func show(since keyMs: Double) {
+    func show(since keyMs: Double, text: String = "闪说 · 正在录音（探测）") {
+        baseText = text
+        label?.stringValue = text
         let (screen, how) = targetScreen()
         let f = screen.visibleFrame
         panel.setFrameOrigin(NSPoint(x: f.midX - panel.frame.width / 2, y: f.minY + 60))
@@ -433,12 +444,73 @@ final class Capsule {
     func hide() { panel.orderOut(nil) }
 }
 
+// MARK: - Microphone (real capture; only level and duration are computed, audio is never stored)
+
+final class Mic {
+    private let engine = AVAudioEngine()
+    private var startMs = 0.0
+    private var firstBufferMs: Double?
+    private var frames: Int = 0
+    private var peak: Float = 0
+    private var rate: Double = 0
+    private(set) var running = false
+    var onLevel: ((Float) -> Void)?
+
+    func start(keyMs: Double) {
+        guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
+            log.event("mic_skipped", ["status": micStatus()])
+            return
+        }
+        startMs = nowMs()
+        firstBufferMs = nil
+        frames = 0
+        peak = 0
+        let input = engine.inputNode
+        let fmt = input.outputFormat(forBus: 0)
+        rate = fmt.sampleRate
+        input.installTap(onBus: 0, bufferSize: 1024, format: fmt) { [weak self] buf, _ in
+            let n = Int(buf.frameLength)
+            var p: Float = 0
+            if let ch = buf.floatChannelData?[0] { for i in 0 ..< n { p = max(p, abs(ch[i])) } }
+            DispatchQueue.main.async {
+                guard let self, self.running else { return }
+                if self.firstBufferMs == nil {
+                    self.firstBufferMs = nowMs() - self.startMs
+                    log.event("mic_first_buffer", ["ms_since_start": Int(self.firstBufferMs!), "ms_since_key": Int(nowMs() - keyMs)])
+                }
+                self.frames += n
+                self.peak = max(self.peak, p)
+                self.onLevel?(p)
+            }
+        }
+        do {
+            try engine.start()
+            running = true
+            log.event("mic_started", ["start_ms": Int(nowMs() - startMs), "ms_since_key": Int(nowMs() - keyMs),
+                                      "sample_rate": Int(rate), "channels": Int(fmt.channelCount)])
+        } catch {
+            input.removeTap(onBus: 0)
+            log.event("mic_start_failed", ["error": "\(error)"])
+        }
+    }
+
+    func stop() -> [String: Any] {
+        guard running else { return [:] }
+        running = false
+        engine.inputNode.removeTap(onBus: 0)
+        engine.stop()
+        return ["captured_s": rate > 0 ? Double(frames) / rate : -1, "peak": Double(peak),
+                "first_buffer_ms": firstBufferMs.map { Int($0) } ?? -1]
+    }
+}
+
 // MARK: - App
 
 final class Probe: NSObject, NSApplicationDelegate {
     let tap = KeyTap()
     let carbon = CarbonKeys()
     let capsule = Capsule()
+    let mic = Mic()
     var window: NSWindow!
     var statusLabel: NSTextField!
     var logView: NSTextView!
@@ -539,7 +611,9 @@ final class Probe: NSObject, NSApplicationDelegate {
             log.event("hold_blocked_secure", ["key": "\(key)", "front": frontBundle(), "secure_input": secureInputOn()])
             return
         }
-        capsule.show(since: holdStartMs)
+        capsule.show(since: holdStartMs, text: copyOnly ? "闪说 · 正在录音（仅复制）" : "闪说 · 正在录音（探测）")
+        mic.onLevel = { [weak self] p in self?.capsule.setLevel(p) }
+        mic.start(keyMs: holdStartMs)
         if copyOnly { carbon.grabEsc(true) }
         log.event("hold_begin", ["key": "\(key)", "front": frontBundle(), "mode": copyOnly ? "copy_only" : "direct"])
     }
@@ -548,7 +622,9 @@ final class Probe: NSObject, NSApplicationDelegate {
         guard holding, key == holdKey else { return }
         holding = false
         capsule.hide()
-        log.event("hold_end", ["key": "\(key)", "held_ms": Int(nowMs() - holdStartMs), "cancelled": cancelled, "blocked_secure": blockedSecure])
+        var row: [String: Any] = ["key": "\(key)", "held_ms": Int(nowMs() - holdStartMs), "cancelled": cancelled, "blocked_secure": blockedSecure]
+        row.merge(mic.stop()) { a, _ in a }
+        log.event("hold_end", row)
         if blockedSecure || cancelled { carbon.grabEsc(false); return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
             self.insertTest()
@@ -560,7 +636,9 @@ final class Probe: NSObject, NSApplicationDelegate {
         guard holding else { return }
         cancelled = true
         capsule.hide()
-        log.event("cancelled", ["by": by, "front": frontBundle()])
+        var row: [String: Any] = ["by": by, "front": frontBundle()]
+        row.merge(mic.stop()) { a, _ in a }
+        log.event("cancelled", row)
     }
 
     // MARK: insertion test
