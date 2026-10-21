@@ -6,3 +6,5 @@ __pycache__/
 *.pyc
 .venv/
 bench/asr/results/*/*.log
+Vendor/sherpa-onnx/lib/
+.vendor-cache/
