@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>语音输入（暂定名）· 交互原型 v0.1</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- 模拟的 macOS 桌面：这里的一切属于产品界面或模拟的系统界面 -->
+  <main class="desktop" id="desktop" aria-label="模拟的 macOS 桌面">
+    <div class="menubar" id="menubar"></div>
+    <div id="menu-layer"></div>
+    <div id="desktop-icons" class="desktop-icons" aria-hidden="true">
+      <div><div class="icon"></div>报价单.pdf</div>
+      <div><div class="icon"></div>截图</div>
+    </div>
+    <div id="target-layer"></div>
+    <div id="settings-layer"></div>
+    <div id="onboarding-layer"></div>
+    <div id="repair-layer"></div>
+    <div id="pill-layer" class="pill-layer" aria-live="polite"></div>
+    <button class="fn-key" id="fn-key" type="button" aria-label="演示：按住此键说话"></button>
+    <div class="fn-key-caption" id="fn-key-caption"></div>
+    <div id="overlay-layer"></div>
+  </main>
+
+  <!-- 演示设置：不属于产品界面 -->
+  <aside class="demo" id="demo" aria-label="演示设置"></aside>
+
+  <script src="domain.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
