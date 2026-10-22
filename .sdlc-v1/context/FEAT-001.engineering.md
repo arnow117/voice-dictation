@@ -392,7 +392,19 @@ T010 重新打开，由同一 core_delivery worker 完成有界修正与生产 h
 
 ## 发布与观察记录（实际）
 
-尚未开始。
+### 发布执行与授权确认（2026-10-22）
+
+主 Agent 已更新并 ready PR #4，使用实际最终 head `abe0c9692c2550a433c210ff36dfd75653ecce5c` 做匹配合并；PR 在 `2026-10-22T12:17:06Z` 合入，main 为 `c2a9cff2b428fb41e00561644616144c5d4a4930`。实际 fetch 后核对 validation `930c7fee` 到 origin/main 没有业务差异。公开前最后的全部可达历史为 769 对象 / 415 blob 版本，六类凭据模式及两项现有本地 secret 精确匹配均为零；最终 ZIP/DMG 的内容复核结果同上。本机安装仍为最终 `1.0.2`，Fn 偏好保留。
+
+仓库改为 public 的命令起初被自动审批明确拒绝，理由是当时可见的可信用户消息没有对这个具体仓库公开的充分授权。随后保持仓库私有的 prerelease/三资产上传命令也在执行前被自动审批拒绝，理由是未确认向该具体仓库上传资产的授权。两项拒绝均未绕过，命令未执行，当时保持 reviewed。用户随后对包含具体仓库、全部源码历史、三项资产与发布说明的确认问题明确回复“确认公开该仓库并发布测试版”，主 Agent 据此继续；没有再次修改业务代码或重建资产。
+
+### 公开发布完成与技术观察（2026-10-22）
+
+实际执行 `gh repo edit arnow117/voice-dictation --visibility public --accept-visibility-change-consequences` 成功，读取 repository visibility 为 PUBLIC。以 `--target c2a9cff2b428fb41e00561644616144c5d4a4930` 执行 `gh release create v0.1.0-beta.1`，上传冻结 ZIP、DMG、SHA256SUMS.txt 并使用已核对的 release-body，结果为[闪说 v0.1.0-beta.1](https://github.com/arnow117/voice-dictation/releases/tag/v0.1.0-beta.1)。实际 release ID 为 `420694864`，`published_at=2026-10-22T12:28:38Z`，非 draft、prerelease，三项资产均 uploaded。实际 fetch tag 后解析为上述合并 commit；tag 与 validation `930c7fee` 无业务源码差异。
+
+发布后立刻通过 `curl -q -fsSL`（未提供 GitHub 凭据或 Authorization）请求公开 repository API，并从 release 返回的三个 browser_download_url 逐一下载到新的 `.work/release-publication/public-download-smoke/`。公开 API 确认为非私有；ZIP、DMG、清单文件大小分别为 9,652,475 / 10,713,844 / 210 bytes，SHA-256 分别为 `da8e9588afab1fb849148d898681da12aac538ed1125fcfb7fc65094d42c35fd`、`0cee66ef738fd0b997cf43cced43e55159479b634a45153b2aec6ca8e663db77`、`cecbb71be2933761d030f5c492151b50c436130bc1981c725761d8a601c5adb0`，与冻结资产和 GitHub digest 完全一致；公开下载目录的 `shasum -a 256 -c SHA256SUMS.txt` 两项均 OK。实际 metadata 和 smoke 回执保存在 `.work/release-publication/`。
+
+技术观察引用 REQ-001“发布后观察计划”。本次已完成实际安装版 ready、公开音频 CLI、生产回归、签名/包内容和公开下载观察；没有新增遥测、定时任务或新真人听写证据，未证明其他网络地域的下载可用性。Codex 自动插入、完整矩阵、无障碍与原质量指标缺口仍按 DEC-024/025 公开。没有发布失败或回滚；后续技术检查由用户反馈触发，保持现有本地诊断隐私边界。
 
 ### FEAT-001 源码与测试版分发准备（2026-10-22）
 
