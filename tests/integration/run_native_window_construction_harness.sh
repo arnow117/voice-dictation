@@ -16,9 +16,11 @@ swiftc -swift-version 5 -target arm64-apple-macos14.0 -module-cache-path "$WORK/
   "$ROOT/app/Shanshuo/App/AppModel.swift" \
   "$ROOT/app/Shanshuo/App/DeferredActionGate.swift" \
   "$ROOT/app/Shanshuo/App/OnboardingProgress.swift" \
+  "$ROOT/app/Shanshuo/App/OperationFailureState.swift" \
   "$ROOT/app/Shanshuo/App/PauseController.swift" \
   "$ROOT/app/Shanshuo/App/Paths.swift" \
   "$ROOT/app/Shanshuo/App/PracticeSessionState.swift" \
+  "$ROOT/app/Shanshuo/App/SoundPreference.swift" \
   "$ROOT/app/Shanshuo/Coordinator/DictationCoordinator.swift" \
   "$ROOT/app/Shanshuo/History/HistoryStore.swift" \
   "$ROOT/app/Shanshuo/Models/ModelFileDownloader.swift" \
@@ -27,7 +29,9 @@ swiftc -swift-version 5 -target arm64-apple-macos14.0 -module-cache-path "$WORK/
   "$ROOT/app/Shanshuo/Models/Qwen3ModelFiles.swift" \
   "$ROOT/app/Shanshuo/Platform/AudioEngineEvents.swift" \
   "$ROOT/app/Shanshuo/Platform/InputDeviceSelection.swift" \
+  "$ROOT/app/Shanshuo/Platform/HotkeyConfiguration.swift" \
   "$ROOT/app/Shanshuo/Platform/MemoryAudioCapture.swift" \
+  "$ROOT/app/Shanshuo/Platform/QueuedAudioOperationLease.swift" \
   "$ROOT/app/Shanshuo/Platform/SystemState.swift" \
   "$ROOT/app/Shanshuo/Platform/TextInsertionOperation.swift" \
   "$ROOT/app/Shanshuo/Platform/TextInserter.swift" \
@@ -35,6 +39,7 @@ swiftc -swift-version 5 -target arm64-apple-macos14.0 -module-cache-path "$WORK/
   "$ROOT/app/Shanshuo/UI/ModelManagementWindowController.swift" \
   "$ROOT/app/Shanshuo/UI/OnboardingWindowController.swift" \
   "$ROOT/app/Shanshuo/UI/PrivacyWindowController.swift" \
+  "$ROOT/app/Shanshuo/UI/SettingsWindowController.swift" \
   "$ROOT/tests/integration/native_window_construction_harness.swift" \
   -o "$OUT"
 "$OUT"

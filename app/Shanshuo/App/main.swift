@@ -40,6 +40,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private var onboardingWindowController: OnboardingWindowController?
   private var historyWindowController: HistoryWindowController?
   private var privacyWindowController: PrivacyWindowController?
+  private var settingsWindowController: SettingsWindowController?
   private var appModel: AppModel?
   private var modelObservation: UUID?
 
@@ -52,6 +53,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       systemSymbolName: "waveform", accessibilityDescription: ShanshuoInfo.displayName)
 
     statusItem.menu = makeMenu()
+    NSApp.mainMenu = makeApplicationMenu()
     let pill = RecordingPill(
       statusButton: statusButton,
       statusMenuItem: sessionItem,
@@ -131,6 +133,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     )
     manageModelItem.target = self
     menu.addItem(manageModelItem)
+    let settingsItem = NSMenuItem(title: "设置…", action: #selector(openSettings), keyEquivalent: ",")
+    settingsItem.target = self
+    menu.addItem(settingsItem)
     menu.addItem(accessItem)
     menu.addItem(hotkeyItem)
     pauseOneHourItem.target = self
@@ -159,6 +164,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     return menu
   }
 
+  /// An accessory application still needs a main menu while one of its native windows is key.
+  /// Status-item key equivalents alone do not receive Command-Comma from the focused window.
+  private func makeApplicationMenu() -> NSMenu {
+    let mainMenu = NSMenu()
+    let applicationItem = NSMenuItem(
+      title: ShanshuoInfo.displayName, action: nil, keyEquivalent: "")
+    let applicationMenu = NSMenu(title: ShanshuoInfo.displayName)
+
+    let settingsItem = NSMenuItem(title: "设置…", action: #selector(openSettings), keyEquivalent: ",")
+    settingsItem.target = self
+    applicationMenu.addItem(settingsItem)
+    applicationMenu.addItem(.separator())
+
+    let quitItem = NSMenuItem(
+      title: "退出\(ShanshuoInfo.displayName)",
+      action: #selector(NSApplication.terminate(_:)),
+      keyEquivalent: "q"
+    )
+    quitItem.target = NSApp
+    applicationMenu.addItem(quitItem)
+
+    applicationItem.submenu = applicationMenu
+    mainMenu.addItem(applicationItem)
+    return mainMenu
+  }
+
   private func configureModelManager() {
     do {
       let manifest = try Qwen3ModelManifest.loadBundled()
@@ -183,7 +214,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         coordinator: coordinator,
         audioCapture: audioCapture,
         modelManager: manager,
-        historyStore: HistoryStore(directory: Paths.historyDirectory)
+        historyStore: HistoryStore(directory: Paths.historyDirectory),
+        soundPreference: soundPlayer
       )
       self.appModel = appModel
       onboardingWindowController = OnboardingWindowController(
@@ -197,6 +229,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       )
       historyWindowController = HistoryWindowController(model: appModel)
       privacyWindowController = PrivacyWindowController(model: appModel)
+      settingsWindowController = SettingsWindowController(
+        model: appModel,
+        openAccessibilitySettings: { [weak self] in self?.openAccessibilitySettings() },
+        openKeyboardSettings: { [weak self] in self?.openKeyboardSettings() },
+        openModelManagement: { [weak self] in self?.openModelManagement() },
+        openHistory: { [weak self] in self?.openHistory() },
+        openPrivacy: { [weak self] in self?.openPrivacy() }
+      )
     } catch {
       modelItem.title = "语音模型：配置错误"
     }
@@ -304,6 +344,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     onboardingWindowController?.showWindow(nil)
   }
 
+  @objc private func openSettings() {
+    settingsWindowController?.showWindow(nil)
+  }
+
   @objc private func openHistory() {
     historyWindowController?.showWindow(nil)
   }
@@ -334,6 +378,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     appModel.resumeDictation()
     refreshSystemState()
+  }
+
+  private func openKeyboardSettings() {
+    guard let url = URL(string: "x-apple.systempreferences:com.apple.Keyboard-Settings.extension")
+    else {
+      return
+    }
+    NSWorkspace.shared.open(url)
   }
 
   private func openOnboardingIfNeeded() {

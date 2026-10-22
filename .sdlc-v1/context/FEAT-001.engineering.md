@@ -104,15 +104,24 @@ flowchart LR
 - 应用级主线程状态对象提供共享投影，窗口只发送命令；Coordinator 继续独占会话状态，ModelManager 独占模型文件变更，HistoryStore 串行拥有数据库。引导只保存进度、已访问步骤与成功/跳过标记，不保存练习文本或音频。有效步骤不包含输入监控和整理配置。
 - 麦克风测试复用受控采集边界，和听写互斥；显示测试状态后才能采集，关页/关窗/跳过/权限变化立即取消。声音检测来自真实电平；快捷键测试来自真实按住和松开事件。练习成功关联 session ID 与真实识别结果：直接模式确认控件实际收到该文本；复制模式须用户把本次实际结果粘贴入练习框。普通手输、非空初始值、快捷键注册成功或未验证插入回调都不能单独完成练习。
 - 原生练习绑定在每次按下前根据实际可见窗口、当前步骤和 first responder 重新确认；误触、取消或空输出后可直接重试，不因一次性 claim 耗尽而把后续练习写入历史。无辅助功能时也用本应用原生控件事实验证，不能只以相同 PID 代替实时练习焦点。麦克风测试的延迟启动须校验同一页面/窗口代次及实际可见状态，关闭或离页先使尚未执行的启动失效。
+- 练习离页/关窗取消属于该练习 binding 的活动采集、识别和延迟插入，不能影响其他正常听写；同时使迟到 outcome、控件读回和粘贴检查失效。练习证明按本次 attempt/session 与实际编辑或粘贴事件建立关联，旧控件值恰好等于识别结果不能单独作为实际插入证明，`.unverified` 也不能直接视作已交付。
+- 麦克风测试在停止音频队列完成前保留 stopping operation 和取消能力；排队停止请求强持有其 operation 至执行完毕，所有异步停止完成均检查代次。关闭、重试或暂停不能让旧完成更改新测试状态；停止阶段继续与听写互斥。
+- 历史读写、删除和清空失败通过 AppModel 共享状态持久发布；失败不得被周期状态刷新或一次成功查询清掉，窗口提供明确失败与重试操作。只在相应操作成功后清除其错误状态。
 - 原生窗口必须先建立父子视图层次，再激活跨视图约束。构建检查之外，生产窗口构造与布局 harness 实例化模型、引导、历史和隐私窗口（及后续设置窗口），验证没有 Objective-C 布局异常；不能把“Swift 编译成功”视为窗口能创建。首次启动窗口仍需 CUA 实际观察。
 - 偏好快捷键与当前有效快捷键分别建模；无辅助功能时强制有效值为 ⌃⇧ Space，保留用户偏好。自定义支持单修饰键及修饰键加普通键，拒绝无修饰普通键和系统保留组合，失败必须显示实际未注册状态。Fn 系统占用仅检测并给出系统设置入口，不静默修改系统键盘偏好。
 - T014 的快捷键配置使用可序列化的键码/修饰键描述，兼容读取已有 function/rightOption/copyOnlyControlShiftSpace 偏好值；不能把旧用户设置直接重置。会话开始时捕获直接插入/仅复制模式，后续取消与授权提示依据该模式，不依据某个快捷键枚举名推断。更改快捷键或进入录入控件先取消活动会话，避免换键后旧 keyUp 无法停止录音；录入期间暂停全局触发，提交/取消后恢复准确的有效配置。自定义组合消费其匹配的普通键事件，不能把该键漏入目标控件。当前单修饰键加其他键的系统组合仍取消本次听写。
 - 输入设备保存稳定 UID 或“跟随系统默认”，开始时解析并固定本次设备；设置变化及默认设备变化在下一次生效。仅设备列表变化不能取消仍可用的活动设备；活动设备消失或实际引擎重配置无法续采时取消并丢弃，绝不续接替换设备。只配置本应用输入单元，不改变系统默认设备。复用 AVAudioEngine / CoreAudio 的设备设置，参见 [Apple AUAudioUnit 设备接口](https://developer.apple.com/documentation/audiotoolbox/auaudiounit/deviceid)。
+- 本应用主动选择输入设备所需的图配置必须作为可取消的准备阶段完成，不能在活动 capture 已登记之后调用 `setDeviceID`，再把由该调用延迟产生的配置通知误判为外部中断。准备代次绑定明确的设备计划，通知处理后重新验证实际设备/格式与计划一致，完成后才报告可录音；未准备好时明确拒绝或等待受控准备，不采集替代设备。启动/设备选择后可后台准备；进行中的设置变化仍只作用于下一次。真正采集期间的设备消失、路由或引擎重配置继续取消并丢弃，不能通过全局忽略配置通知修正冷启动失败。麦克风准备耗时计入 NFR-006。
+- 准备就绪绑定已解析的设备 UID/ID、engine epoch、准备代次和配置 revision；同一次默认设备计划不能在重试时偷偷解析成另一个设备。setter 返回、串行队列已执行、非零格式或 `engine.start` 成功均不等于延迟通知已经处理：实际改路后的准备完成需要明确的通知/图配置完成判据与设备、格式复核，目标设备已经一致时避免重复 setter。通知进入时记录所属 engine epoch/revision，提交准备和启动采集时复核；取消、关闭或旧引擎的迟到回调不能恢复 ready、启动新采集或中断另一个 engine。公共通知没有原因标识，不用“忽略下一次”、通知次数或任意宽限时间推断来源。
 - Coordinator 在最终仍有效的结果上发布唯一的 SessionOutcome，包含 session ID、允许保留的文本、真实 inserted/copied/unverified 结果与目标；历史与练习消费此事件，不能从胶囊文案或早到的识别回调推断成功。取消、安全输入、睡眠等丢弃路径不得产生含文本事件。历史按 session ID 去重，串行删除/清空后旧回调不能复活记录；查询排除已过期项，数据库及其 WAL/SHM/journal 和目录均限制当前用户访问。
 - 暂停支持一小时与手动恢复，立即取消活动会话；持久化暂停模式/截止时间，唤醒或重启按绝对截止时间重算。历史默认开启且保留七天；关闭只停止后续写入，已有记录由明确删除操作处理。诊断接口只接受事件枚举、耗时和错误码，不能接收任意文本或底层错误描述。
 - 公共源码构建不依赖发布私钥或本机绝对路径。开发者可选择自己的签名身份或 ad-hoc 构建；发布资产使用已有测试签名身份，并附全部许可。release 配置不携带开发模型路径、测试注入或私人数据。源码公开与发布授权见 REQ-001 DEC-022，未改变产品质量阈值。
+- 首个公开测试版的准确率范围按 REQ-001 DEC-024：接受已公开实测的中文 6.48% 与混说 12.94% 限制，原定 NFR-003 保持未通过；英文 6.03% 达标。其他隐私、安全、兼容性和质量要求继续验证，不由准确率例外推导额外豁免。
 - 首个公开候选版本按 `v0.1.0-beta.1` 准备，应用版本 `0.1.0`；构建号使用合法数字版本，时间戳另存，不能继续把带连字符的日期当作 CFBundleVersion。分发产物为 .app 的 ZIP、DMG 和 SHA-256 清单，包含自有及第三方许可。安装说明如实说明自签名、未公证及系统的首次打开步骤，不修改全局 Gatekeeper 或绕过证书检查。版本键规则参见 [Apple Core Foundation Keys](https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html)。
 - 实现期间的单元、集成与模拟系统证据不替代 T015 的真机、权限、性能和兼容性验证；所有环境缺口与未测项目显式记录，最终验证不得将其算作通过。
+- T015 通过少量本地类型化事件观测真实生产路径：随机 attempt/session ID、固定事件/结果枚举、单调时钟和必要音频时长；接口不接收转写、窗口标题、剪贴板内容、任意错误字符串或完整路径，不上传诊断。分别记录热键回调、AppKit 显示提交、实际采集/停止、识别交付、AX 读回验证、复制与未验证粘贴；失败/取消也计入分母。`display()/isVisible` 不是屏幕首帧，`.unverified` 不是实际插入完成。NFR-001 若只有应用提交时间，必须保留首帧时间未证实的限制。
+- T015 的端到端延迟优先使用备忘录实际 AX 写入/读回验证作为终点；不超过 15 秒和 30 秒各计划 20 次，记录分布及失败，和八应用矩阵结果分别统计并复用重叠试次。输入使用许可清楚的非私人测试语句，经播放器和真实麦克风进入产品路径；UI 操作只经 CUA，不向发布产品注入 WAV 或成功回执。进程冷启动用 `proc_pid_rusage` 起始时间至实际 ready，3～5 次且计入模型验证/加载；空闲 CPU 用 120 秒进程 user+system 累计差与单调墙钟计算，区间无采集/下载/校验且仅采样两端。无法可靠执行的真实操作如实记录，不能用模拟结果替代。
+- T015 本地性能事件由单一串行 sink 写入固定的应用支持目录；只接受固定事件/结果枚举、随机过程与会话 UUID、单调时间和必要时长，不接受任意字符串、识别文本、窗口/应用标题、剪贴板或路径。文件限制 owner-only、有限总容量和保留数量，默认不上传，并在隐私说明披露用途。普通界面按键路径和正式 release 配置使用相同事件边界，不能为测量插入模拟成功。状态投影仅在相关值变化时发布，隐藏窗口不持续渲染；设备列表在显示/打开菜单或实际硬件变化时更新。性能修正不降低正在录音时的安全输入、权限、期限和 common-mode 检查频率。
 
 #### 数据模型 / 关键实体
 
@@ -379,4 +388,54 @@ sequenceDiagram
 
 主 Agent 复核了实时 practice provider、延迟麦克风测试失效、暂停菜单、输入设备切换和 SQLite 错误处理；同一 worker 的构建 `20261022-131011` 通过 13 个单元测试及全部 harness，formatter 和 diff 检查通过。接受这三个 Task 的 build 交付并按依赖顺序标记 done，真实系统验收仍属于 T015。CUA 已实际看到构建 `20261022-130455` 的欢迎窗口和麦克风步骤，无布局异常；尚未授予权限或声称完整引导通过。
 
-独立冻结的构建 `20261022-125650` 完成原始 120 条 ASR，全部实际解码，无空输出。中文/英文/混说/实体错误率为 6.48% / 6.03% / 12.94% / 3.81%；英文低音量跳过问题解决，NFR-003 整体仍未通过，中文与混说的公开测试版例外已向用户请求决定，未自行放宽。报告见 `docs/validation/asr-rms-fix-125650.md`，原始结果和 binary SHA-256 一并保存。纯解码 P50 1.383 秒、P95 2.2294 秒不能作为端到端验收。
+独立冻结的构建 `20261022-125650` 完成原始 120 条 ASR，全部实际解码，无空输出。中文/英文/混说/实体错误率为 6.48% / 6.03% / 12.94% / 3.81%；英文低音量跳过问题解决，NFR-003 整体仍未通过。用户之后明确接受首个公开测试版的中文与混说限制，已记录 REQ-001 DEC-024；没有自行放宽或把原目标记为通过。报告见 `docs/validation/asr-rms-fix-125650.md`，原始结果和 binary SHA-256 一并保存。纯解码 P50 1.383 秒、P95 2.2294 秒不能作为端到端验收。
+
+### 独立中间代码复核：d96fc52（2026-10-22）
+
+只读 reviewer 在固定 Git 对象上确认四项新缺陷：麦克风测试自然停止时 weak operation 可能提前释放而跳过实际引擎停止（P1）；关闭或离开练习不取消其在途会话（P2）；旧值等于 `.unverified` 转写可被误判为本次插入成功（P2）；历史删除/清空错误被丢弃或被周期刷新覆盖（P2）。这些是静态因果证据，没有声称实机复现。T011/T013 已重新打开，与同一 worker 的 T014 集成一并修正，当前有效方案已明确所有权、取消代次、练习交付证明和共享错误状态。此前 build 验收与测试证据保留，但不能代表这些新增分支已通过。真实麦克风验证等待修复完成；最终独立 validate/review 仍未执行。
+
+### 固定构建 133149：真实权限与麦克风启动对照（2026-10-22）
+
+用户确认系统访问授权并在本机完成密码认证。CUA 实际看到系统 Shanshuo 辅助功能开关 ON、应用麦克风已授权、引导自动推进到模型步骤；重启固定签名构建 `20261022-133149` 后权限保留并恢复模型就绪。固定 app 复制在忽略的 `.work/validation/gui-133149/`；受限环境 codesign 验证报钥匙串信任不可读，提升为只读证书检查后 `codesign --verify --strict` exit 0。当前系统 Fn 设置经 CUA 读到“显示表情与符号”，没有修改。
+
+首次真实麦克风测试在约 0.5 秒内被取消。只读系统日志明确记录应用主动把 input unit 从默认聚合设备 155 切换到内建输入 80，13:38:53.363 引擎启动，13:38:53.460 配置变化通知到达后应用立即停止。一次两分钟内的同设备对照保持构建、权限、偏好和进程不变：第二次设备 80→80 没有新的配置通知，CUA 看到实际电平 0.1186，8 秒后显示“检测到声音”；系统日志 13:39:44.973 证实引擎停止，输入 IOState 回到 [0,0]。这验证了停止回调/自然停止修正，同时定位了主动设备配置通知与新 capture 的时序问题；不能将首个失败算为完整麦克风测试通过。
+
+日志只保留在忽略目录，未保存或识别音频。当前有效方案增加“设备配置先准备，真实采集后外部中断仍取消”的边界，交同一 worker 修正；不以忽略所有配置通知或重复点击掩盖首次失败。T011/T013/T014 仍在进行。
+
+### T014 准备实现的验收安排与旧构建空闲基线（2026-10-22）
+
+worker 返回签名构建 `20261022-140245` 后，主 Agent 安排独立 reviewer 对这份固定的未提交音频准备实现做只读复核，原因是通知和取消的时序直接影响首次真实采集；范围限音频准备适配器、生产 harness 与必要 Coordinator 绑定，聚合点为本批 build 验收和首次 GUI 复测，不替代最终 lifecycle review。实现写入者此时已停止修改。
+
+固定旧构建 `133149` 的空闲初测以 `ps` 进程累计 CPU 时间差除以单调墙钟，单核 100% 为基准。引导窗口可见时 120.02 秒使用 1.58 CPU 秒（1.32%），关闭引导后 120.03 秒使用 1.45 CPU 秒（1.21%）；关闭窗口没有消除主要开销。没有采集或下载，此时状态已就绪。此为旧构建的定位基线，NFR-004 尚未通过，修正后的候选构建仍需重新采样；原始 JSON 仅在忽略的验证目录。
+
+对固定 `140245` 做一次 1 秒只读 `sample`（PID 1679，命令 exit 0），实际捕获到周期 Timer → AppModel.publish → 已关闭的 Privacy/Settings render，以及 Settings → CoreAudio 设备枚举调用；ASR 工作线程均在条件等待。该样本提供后台投影/界面刷新的可检查执行路径，不能单凭采样计数分配全部 CPU 开销。T015 优先落实有变化才发布、隐藏窗口不重渲染与按需设备清单，并在最终候选上复测 120 秒；原始调用栈仅在忽略目录。
+
+主 Agent 用新进程固定构建 `140245` 实际启动第一次麦克风测试，CUA 读到实时电平 0.1631，8 秒自然停止后读到“检测到声音”，未保存或识别音频。`⌘,` 实际打开设置，设备列表已不含内部聚合设备。自定义 `⌃⇧K` 录入后却显示“未识别按键”；源码把 TIS 返回的 CFData 对象指针直接当作 UCKeyboardLayout，需改为取其 bytes 后再翻译。独立 reviewer 确认另外两项时序缺陷：ready 缓存只比较默认 nil 偏好而可复用旧默认设备；准备确认超时只拒绝当时 pending 请求，后到新请求仍可接收旧通知。主 Agent 还确认生产热键分支在其他键取消时调用 reset，清掉仍被按住的触发键消费状态。以上交同一 worker 补正，首次采集成功证据保留，但尚未接受 T014。
+
+### T011/T013 适配器收尾与 T014 设置（worker 实现，待主 Agent 验收，2026-10-22）
+
+- **准备与设备路由**：固定构建 `20261022-133149` 的首次真实采集日志表明 `setDeviceID` 后的延迟图配置通知会取消已开始的采集。本轮把路由放到未 armed 的 `InputPreparation` ticket：ticket 固定解析后的计划、目标 `AudioDeviceID`、operation identifier、engine epoch、generation 和 configuration revision。目标设备已经是 input unit 当前设备时跳过 setter；实际改路时，只有收到配置通知、在同一 epoch/revision 下读回目标设备且输入格式有效，才会提交 ready。两秒上限只把未确认 ticket 显式报告为 unavailable，绝不把它提升为 ready。取消的 A ticket 会先排空其通知/失败路径，B 只能随后独立配置；A 的未确认 timeout 不会在同一 engine 上启动 B。真正 listening 后任何图配置通知仍使 operation 失效、清零并让 Coordinator 取消。
+- **设备列表与原生控件**：生产 CoreAudio adapter 读取 aggregate composition 的 `kAudioAggregateDeviceIsPrivateKey`，隐藏仅本进程私有的自动 default aggregate，同时保留用户创建 aggregate 和虚拟硬件；已保存的私有 UID 也不能再解析到 input unit。Onboarding 与 Settings 缓存设备/快捷键项目，在 popup tracking 期间不重建或重选，菜单关闭后才刷新，避免键盘选择被 0.5 秒状态投影打断。
+- **设置与快捷键**：菜单栏和原生 Settings 覆盖快捷键、下一次采集的输入设备、提示音，以及模型/历史/隐私入口；另建标准 app main menu，使聚焦的引导/设置窗口能用 ⌘, 打开同一设置动作。自定义快捷键使用可序列化 keycode/modifier descriptor，保留旧 function/rightOption/⌃⇧ Space 偏好；录入器在单修饰键松开时才提交，因此右 Option 加普通键不会被提前截断。生产 reducer 精确匹配普通键修饰符并在 modifier 先松开后继续消费该物理 trigger 的 repeat/keyUp；Fn 仍只提示未知/可能冲突并引导到键盘设置，不写系统偏好。⌃⇧ Space 的名称不再内含“仅复制”，实际交付模式按会话权限快照决定。
+- **检查**：`xcrun swift-format format --in-place` 与 `xcrun swift-format lint`（本段 Swift 源与 harness）均 exit 0；`git diff --check` exit 0。`bash tests/integration/run_queued_audio_operation_lease_harness.sh` exit 0，使用实际 `MemoryAudioCapture` 的受控 engine queue，覆盖调用方释放后的 queued start/stop、延迟自身配置通知、取消 A 后默认 A→B 的排空顺序，以及未确认 A 不启动 pending B；不请求权限或采集音频。`run_input_device_selection_harness.sh`、`run_hotkey_configuration_harness.sh`、`run_coordinator_harness.sh` 和 `run_native_window_construction_harness.sh` 均 exit 0。最后在沙箱外执行 `SKIP_ASR=1 bash scripts/test.sh` exit 0，签名构建 `20261022-140245`：13 个 Swift 单元测试、build、Coordinator、快捷键、TextInserter、几何、chunk、History、输入设备、queued audio、Onboarding/暂停、原生窗口、ASR cancellation、ModelManager 和 downloader harness 全部通过。ASR 输入与运行时未改，本段未重跑 120 条评测。
+- **未代替的验证**：worker 未启动或退出父 Agent 管理的 GUI，未改变系统权限/默认输入/键盘设置，也未把本地 harness 当成真实首次麦克风、Fn、VoiceOver、设备插拔、多屏或八应用矩阵通过证据。主 Agent/T015 仍需在新的签名 copy 上确认首次真实麦克风采集、⌘,、设备菜单、Fn 与实际应用行为。
+
+### T011/T013/T014 最后设备准备与快捷键纠正（worker 实现，待主 Agent 验收，2026-10-22）
+
+- **默认路由与超时隔离**：`InputPreparation` 现在固定本次解析后的设备 UID/ID、engine instance epoch、configuration epoch 与实际输入 format；每个新 operation 都重新解析“跟随系统默认”，只有解析路由、input unit 实际设备、format 和两个 epoch 都相同时才复用 ready。一次进行中的 ticket 不会再次读取默认设备。未收到自身图配置通知的 ticket 超时后会退休其 `AVAudioEngine` 与观察者，再为后续请求创建新 instance；因此旧 A engine 的迟到通知不能确认、启动或中断新 B engine。正常 listening 期间的当前 engine 重配置仍取消并清零 capture。
+- **快捷键**：自定义键名从 `kTISPropertyUnicodeKeyLayoutData` 的 `CFData` bytes（而不是 CFData 对象地址）调用 `UCKeyTranslate`，保留 data/source 生命周期直到翻译结束。其他键取消通过生产 `CustomHoldShortcutEventReducer.otherKeyPressed()`，只结束 held session，保留实际 trigger 到最终 key-up；所以 K 按住后 J 取消，K 的 repeat/key-up 仍会被消费。
+- **本次检查**：`xcrun swift-format format --in-place …`、`xcrun swift-format lint …` 和 `git diff --check` 均 exit 0。`bash tests/integration/run_input_device_selection_harness.sh`、`run_queued_audio_operation_lease_harness.sh` 与 `run_hotkey_configuration_harness.sh` 均 exit 0。queued harness 以生产 `MemoryAudioCapture`、受控 event source、无硬件 availability/format 边界覆盖 prepared default A → 默认 B（没有 A 的配置通知也必须切到 B），以及 A 超时后 B 使用 replacement engine、A 的迟到 event 不影响 B；不请求权限或采集音频。hotkey harness 在当前可用布局中实际把 keycode 40 翻译为 `K`，并覆盖 K held → J cancel → K repeat/key-up 均被消费。`SKIP_ASR=1 bash scripts/test.sh` 完整运行到 `== all checks passed`；签名 build `20261022-141515`，13 个 Swift 单元测试和 Coordinator、hotkey、TextInserter、geometry、chunk、history、input-device、queued-audio、onboarding、native-window、ASR cancellation、ModelManager/downloader harness 全部通过。ASR 输入、模型和运行时未变，未重跑 120 条评测。
+- **仍待真机**：worker 未重启或操作父 Agent 的固定 GUI。当前 harness 的 K 翻译是执行期 CoreServices 证据，但最终 app 的 Settings 录入显示与实际 Fn/外接键盘、设备插拔和多屏仍需主 Agent/T015 在新签名 copy 中验证，不能由 headless 或 local harness 代替。
+- **主 Agent 复核**：本轮四项改动及测试已有验收进展；继续发现两个确定性残留。已解析的 B 请求在 A 准备期间排队时只保存偏好、丢失 resolved route，A 完成后若默认变为 C 会重新配置 C，而 B 的闭包仍要求 B 并可能不回调。另有新 engine 退休后和错误 route 的失败提交仍把非零格式写入 available。按现有不可变设备计划和真实 readiness 契约，交同一 worker 保存 pending 的解析 route、失败保持 unavailable，并补生产 harness；不扩大平台调查，也不把 timeout 本身算作非收敛。
+
+### T011/T013/T014 build 验收（2026-10-22）
+
+主 Agent 复核最终准备状态修正：pending 保留解析后的设备 route，超时退休引擎且观察者绑定 instance epoch，失败 readiness 不会因物理格式有效而提升。生产 `MemoryAudioCapture` harness 已覆盖 A→B 排队→默认 C、超时后新 engine 与错误 route；签名构建 `20261022-141922` 的 `SKIP_ASR=1 bash scripts/test.sh` exit 0，13 个 Swift 单元测试及全部集成 harness 通过，formatter 与 diff 检查通过。此前固定 `140245` 的首次真实麦克风与自然停止、⌘, 和过滤设备列表证据保留。接受 T011/T013/T014 的 build 交付，真实快捷键、最终构建复测、键盘/VoiceOver、性能及应用矩阵继续由 T015 验收，未声明 NFR 已通过。
+
+CUA 随后的状态检查明确报告 Mac 已锁屏；已经请求用户在本机解锁并完成右 Option 物理按键，无需发送密码。源码与非 GUI 验证可继续。ASR 推理目录与 d96fc52 无差异，因此不重复 120 条准确率评测；DEC-024 的实际结果和失败记录保持原样。
+
+### T011/T013/T014 pending 路由与 readiness 收尾（worker 实现，待主 Agent 验收，2026-10-22）
+
+- **排队路由**：`PendingPreparation` 现在保存 `startOnEngineQueue` 已解析的 `ResolvedInputDevicePlan`。当 A 正在准备而 B 已按下后，A 的完成只会用 B 当时的 UID/ID 开始下一 ticket；不会重新查默认设备并静默变成 C。无法解析的 pending request 会立即以 unavailable 结束，不留下既不采集也不回调的 operation。
+- **真实 ready**：`cachedAvailability` 仅由 `commitPreparation` 在 route、format、engine/configuration epoch 和物理输入均匹配时设为 true。超时、route mismatch、format 无效和 engine retirement 都保持 false；物理 format 有效只是准备前提，不能自行发布可录音。
+- **本次检查**：`xcrun swift-format lint`（受影响 Swift）与 `git diff --check` exit 0。`bash tests/integration/run_queued_audio_operation_lease_harness.sh` exit 0；它用生产 `MemoryAudioCapture` 覆盖 A preparing → B queued → 系统默认 C → A completion：仅配置 B、从不配置 C、B 得到明确 unavailable，而不是遗漏 completion；还覆盖 timeout 后 replacement engine 格式有效但未准备、以及 route mismatch 时 `isAvailable == false`。沙箱外 `SKIP_ASR=1 bash scripts/test.sh` exit 0，签名 build `20261022-141922`，13 个 Swift 单元测试及全部既有 harness 均通过。ASR 输入未变，未重跑 120 条评测。

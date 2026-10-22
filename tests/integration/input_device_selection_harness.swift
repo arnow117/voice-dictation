@@ -9,6 +9,7 @@ private final class FakeInputDeviceConfigurator: InputDeviceConfiguring {
   var devices: [InputDevice]
   var deviceIDsByUID: [String: AudioDeviceID]
   var systemDefaultDeviceID: AudioDeviceID?
+  private var currentDeviceID: AudioDeviceID?
   private(set) var appliedDeviceIDs: [AudioDeviceID] = []
 
   init(
@@ -29,8 +30,16 @@ private final class FakeInputDeviceConfigurator: InputDeviceConfiguring {
     deviceIDsByUID[uid]
   }
 
+  func deviceUID(for deviceID: AudioDeviceID) -> String? {
+    deviceIDsByUID.first { $0.value == deviceID }?.key
+  }
+
   func defaultInputDeviceID() -> AudioDeviceID? {
     systemDefaultDeviceID
+  }
+
+  func currentInputDeviceID() -> AudioDeviceID? {
+    currentDeviceID
   }
 
   func apply(deviceID: AudioDeviceID) throws {
@@ -38,6 +47,7 @@ private final class FakeInputDeviceConfigurator: InputDeviceConfiguring {
       throw FakeDeviceError.unavailable
     }
     appliedDeviceIDs.append(deviceID)
+    currentDeviceID = deviceID
   }
 }
 
@@ -53,6 +63,15 @@ enum InputDeviceSelectionHarness {
   static func main() {
     let builtIn = InputDevice(uid: "built-in", name: "Mac microphone")
     let usb = InputDevice(uid: "usb", name: "USB microphone")
+
+    check(
+      !InputDeviceVisibility.shouldOffer(isPrivateAggregate: true),
+      "a process-private CoreAudio aggregate is not offered or persisted as a user device"
+    )
+    check(
+      InputDeviceVisibility.shouldOffer(isPrivateAggregate: false),
+      "a user-created aggregate or virtual device remains selectable"
+    )
 
     check(
       InputDeviceSelection.resolve(preferredUID: nil, devices: [builtIn, usb]) == .systemDefault,

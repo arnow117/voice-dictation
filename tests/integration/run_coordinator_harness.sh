@@ -14,6 +14,7 @@ mkdir -p "$CLANG_MODULE_CACHE_PATH"
 swiftc -swift-version 5 -target arm64-apple-macos14.0 -module-cache-path "$WORK/build/.mc" \
   -framework AppKit \
   -I "$WORK/build/obj" -L "$WORK/build/obj" -lShanshuoCore \
+  "$ROOT/app/Shanshuo/Platform/HotkeyConfiguration.swift" \
   "$ROOT/app/Shanshuo/Platform/TextInsertionOperation.swift" \
   "$ROOT/app/Shanshuo/Coordinator/DictationCoordinator.swift" \
   "$ROOT/tests/integration/coordinator_harness.swift" \

@@ -10,8 +10,11 @@ final class HistoryWindowController: NSWindowController, NSTableViewDataSource, 
   private let copyButton = NSButton(title: "复制", target: nil, action: nil)
   private let deleteButton = NSButton(title: "删除", target: nil, action: nil)
   private let clearButton = NSButton(title: "清空全部…", target: nil, action: nil)
+  private let retryButton = NSButton(title: "重试", target: nil, action: nil)
   private var records: [HistoryRecord] = []
   private var observation: UUID?
+  private var mutationRetryAction: (() -> Void)?
+  private var queryRetryAction: (() -> Void)?
 
   init(model: AppModel) {
     self.model = model
@@ -31,7 +34,10 @@ final class HistoryWindowController: NSWindowController, NSTableViewDataSource, 
       self?.statusLabel.stringValue =
         snapshot.historyFailure == nil
         ? "只显示最近 7 天的记录。关闭后不会再保存新记录。"
-        : "无法写入历史。请检查本机存储空间和文件权限。"
+        : "无法访问历史。请检查本机存储空间和文件权限。"
+      if snapshot.historyFailure == nil {
+        self?.clearAllRetryActions()
+      }
     }
   }
 
@@ -107,7 +113,11 @@ final class HistoryWindowController: NSWindowController, NSTableViewDataSource, 
     clearButton.target = self
     clearButton.action = #selector(clearAll)
     clearButton.setAccessibilityLabel("清空所有语音输入历史")
-    let buttons = NSStackView(views: [copyButton, deleteButton, clearButton])
+    retryButton.target = self
+    retryButton.action = #selector(retryLastOperation)
+    retryButton.setAccessibilityLabel("重试失败的历史操作")
+    retryButton.isHidden = true
+    let buttons = NSStackView(views: [copyButton, deleteButton, clearButton, retryButton])
     buttons.orientation = .horizontal
     buttons.spacing = 8
 
@@ -128,8 +138,12 @@ final class HistoryWindowController: NSWindowController, NSTableViewDataSource, 
       case .success(let records):
         self.records = records
         self.tableView.reloadData()
+        self.clearQueryRetryAction()
       case .failure:
         self.statusLabel.stringValue = "无法读取历史。请检查本机存储空间和文件权限。"
+        self.setQueryRetryAction { [weak self] in
+          self?.reloadRecords()
+        }
       }
     }
   }
@@ -150,8 +164,20 @@ final class HistoryWindowController: NSWindowController, NSTableViewDataSource, 
     guard let record = selectedRecord() else {
       return
     }
-    model.deleteHistoryRecord(record) { [weak self] _ in
-      self?.reloadRecords()
+    delete(record)
+  }
+
+  private func delete(_ record: HistoryRecord) {
+    model.deleteHistoryRecord(record) { [weak self] result in
+      switch result {
+      case .success:
+        self?.reloadRecords()
+      case .failure:
+        self?.statusLabel.stringValue = "无法删除历史。请检查本机存储空间和文件权限后重试。"
+        self?.setMutationRetryAction { [weak self] in
+          self?.delete(record)
+        }
+      }
     }
   }
 
@@ -164,9 +190,50 @@ final class HistoryWindowController: NSWindowController, NSTableViewDataSource, 
     guard alert.runModal() == .alertFirstButtonReturn else {
       return
     }
-    model.clearHistory { [weak self] _ in
-      self?.reloadRecords()
+    clearConfirmed()
+  }
+
+  private func clearConfirmed() {
+    model.clearHistory { [weak self] result in
+      switch result {
+      case .success:
+        self?.reloadRecords()
+      case .failure:
+        self?.statusLabel.stringValue = "无法清空历史。请检查本机存储空间和文件权限后重试。"
+        self?.setMutationRetryAction { [weak self] in
+          self?.clearConfirmed()
+        }
+      }
     }
+  }
+
+  @objc private func retryLastOperation() {
+    (mutationRetryAction ?? queryRetryAction)?()
+  }
+
+  private func setMutationRetryAction(_ action: @escaping () -> Void) {
+    mutationRetryAction = action
+    updateRetryButton()
+  }
+
+  private func setQueryRetryAction(_ action: @escaping () -> Void) {
+    queryRetryAction = action
+    updateRetryButton()
+  }
+
+  private func clearQueryRetryAction() {
+    queryRetryAction = nil
+    updateRetryButton()
+  }
+
+  private func clearAllRetryActions() {
+    mutationRetryAction = nil
+    queryRetryAction = nil
+    updateRetryButton()
+  }
+
+  private func updateRetryButton() {
+    retryButton.isHidden = mutationRetryAction == nil && queryRetryAction == nil
   }
 
   private func selectedRecord() -> HistoryRecord? {

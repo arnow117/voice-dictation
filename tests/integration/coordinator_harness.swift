@@ -8,12 +8,6 @@ struct SystemFocusSnapshot {
   let target: TargetSnapshot
 }
 
-enum HoldShortcut: Equatable {
-  case function
-  case rightOption
-  case copyOnlyControlShiftSpace
-}
-
 protocol PermissionProviding: AnyObject {
   var microphonePermission: PermissionStatus { get }
   var accessibilityPermission: PermissionStatus { get }
@@ -123,6 +117,7 @@ protocol HotkeyMonitoring: AnyObject {
   var selectedShortcut: HoldShortcut { get set }
   func refresh(accessibilityAuthorized: Bool)
   func setCancellationInterception(_ enabled: Bool)
+  func setTriggeringSuspended(_ suspended: Bool)
   func stop()
 }
 
@@ -192,6 +187,8 @@ private final class FakeAudio: AudioCapturing {
   private(set) var wasCalledOffMainThread = false
   private(set) var cancellationCount = 0
   private var startCompletion: ((AudioCaptureOperation, Result<Void, Error>) -> Void)?
+  var defersStopCompletion = false
+  private var stopCompletion: ((CapturedAudio) -> Void)?
   private var levelHandler: ((Float) -> Void)?
   private(set) var latestOperation: FakeAudioOperation?
 
@@ -229,7 +226,17 @@ private final class FakeAudio: AudioCapturing {
 
   func stop(_ operation: AudioCaptureOperation, completion: @escaping (CapturedAudio) -> Void) {
     record("audio.stop")
-    completion(
+    stopCompletion = completion
+    if defersStopCompletion {
+      return
+    }
+    completePendingStop()
+  }
+
+  func completePendingStop() {
+    let completion = stopCompletion
+    stopCompletion = nil
+    completion?(
       CapturedAudio(
         samples: Array(repeating: 0.1, count: 6_400),
         sampleRate: 16_000,
@@ -373,6 +380,7 @@ private final class FakeHotkeys: HotkeyMonitoring {
 
   func refresh(accessibilityAuthorized: Bool) {}
   func setCancellationInterception(_ enabled: Bool) { interceptionStates.append(enabled) }
+  func setTriggeringSuspended(_ suspended: Bool) {}
   func stop() {}
 }
 
@@ -594,8 +602,12 @@ private func testAudioReconfigurationCancelsAndRecovers() {
 
   let listeningHarness = Harness()
   listeningHarness.pressAndStart()
+  listeningHarness.audio.emitLevel(0.2)
   listeningHarness.audio.simulateEngineConfigurationChange()
-  check(listeningHarness.coordinator.phase == .idle, "configuration change cancels while listening")
+  check(
+    listeningHarness.coordinator.phase == .idle,
+    "configuration change after the first captured level cancels listening"
+  )
   check(
     listeningHarness.recognizer.transcriptionCount == 0,
     "configuration interruption discards audio instead of starting recognition"
@@ -886,6 +898,61 @@ private func testOutcomeAndMicrophoneTestBoundaries() {
   check(
     closeResult == .cancelled,
     "closing microphone test reports cancellation without retaining audio")
+
+  let delayedStopHarness = Harness()
+  delayedStopHarness.audio.defersStopCompletion = true
+  var delayedStopResult: MicrophoneTestCompletion?
+  _ = delayedStopHarness.coordinator.beginMicrophoneTest(
+    indicatorVisible: true,
+    onLevel: { _ in },
+    completion: { delayedStopResult = $0 }
+  )
+  delayedStopHarness.audio.completePendingStart()
+  delayedStopHarness.coordinator.endMicrophoneTest()
+  check(
+    delayedStopHarness.coordinator.isMicrophoneTestActive,
+    "the coordinator retains a stopping microphone-test operation until the engine queue returns"
+  )
+  let overlappingStart = delayedStopHarness.coordinator.beginMicrophoneTest(
+    indicatorVisible: true,
+    onLevel: { _ in },
+    completion: { _ in }
+  )
+  check(!overlappingStart, "a queued engine stop prevents an overlapping capture")
+  delayedStopHarness.audio.completePendingStop()
+  check(delayedStopResult == .cancelled, "a queued cancellation reports only after stop completes")
+  let restarted = delayedStopHarness.coordinator.beginMicrophoneTest(
+    indicatorVisible: true,
+    onLevel: { _ in },
+    completion: { _ in }
+  )
+  check(restarted, "a completed stop releases ownership for the next microphone test")
+
+  let naturalStopHarness = Harness()
+  naturalStopHarness.audio.defersStopCompletion = true
+  var naturalStopResult: MicrophoneTestCompletion?
+  _ = naturalStopHarness.coordinator.beginMicrophoneTest(
+    indicatorVisible: true,
+    onLevel: { _ in },
+    completion: { naturalStopResult = $0 }
+  )
+  naturalStopHarness.audio.completePendingStart()
+  naturalStopHarness.timers.fireAllTimers()
+  let naturalStopOperation = naturalStopHarness.audio.latestOperation
+  check(
+    naturalStopHarness.coordinator.isMicrophoneTestActive,
+    "a natural test timeout retains the stopping operation until the queued stop completes"
+  )
+  naturalStopHarness.coordinator.cancelForSystemInterruption()
+  check(
+    naturalStopOperation?.isCancelled == true,
+    "a later interruption still cancels an operation that is waiting for queued stop cleanup"
+  )
+  naturalStopHarness.audio.completePendingStop()
+  check(
+    naturalStopResult == .cancelled,
+    "cancelling during queued cleanup prevents a natural test result from reviving the closed test"
+  )
 }
 
 private func testPracticeBindingIsLiveForEveryRetry() {
@@ -1028,6 +1095,91 @@ private func testReceiptEndsOnExpiryFocusChangeAndNewPress() {
   nextPressHarness.coordinator.cancelFromHotkey()
 }
 
+private func testDirectSessionCancelsWhenAccessibilityIsRevoked() {
+  let harness = Harness()
+  let customControlShiftSpace = HoldShortcut.custom(
+    HotkeyDescriptor(keyCode: 49, modifiers: [.control, .shift])
+  )
+  harness.pressAndStart(shortcut: customControlShiftSpace)
+  check(
+    harness.coordinator.phase == .listening, "custom Ctrl-Shift-Space starts while AX is authorized"
+  )
+
+  harness.permissions.accessibilityPermission = .denied
+  harness.coordinator.refreshSystemState()
+  check(
+    harness.coordinator.phase == .idle,
+    "a direct session captures its mode and cancels after Accessibility is revoked"
+  )
+  check(harness.audio.cancellationCount == 1, "revocation cancels the active direct capture")
+}
+
+private func testHotkeyRebindCancelsHeldSession() {
+  let harness = Harness()
+  harness.pressAndStart()
+  harness.coordinator.cancelForHotkeyRebind()
+  harness.coordinator.hotkeyChanged(.function, isPressed: false)
+  check(harness.coordinator.phase == .idle, "changing a binding cancels the old held session")
+  check(harness.audio.cancellationCount == 1, "rebinding invalidates the active audio operation")
+  check(
+    harness.recognizer.transcriptionCount == 0, "an old key-up cannot recognize after rebinding")
+}
+
+private func testClosingPracticeCancelsOnlyTheClaimedSession() {
+  func configurePractice(_ harness: Harness) {
+    harness.coordinator.setOnboardingPracticeBindingProvider { target in
+      PracticeSessionBinding(target: target)
+    }
+  }
+
+  let recordingHarness = Harness()
+  configurePractice(recordingHarness)
+  recordingHarness.pressAndStart()
+  recordingHarness.coordinator.cancelOnboardingPracticeSession()
+  check(
+    recordingHarness.audio.cancellationCount == 1, "closing practice cancels an active recording")
+  recordingHarness.audio.completePendingStart()
+  check(
+    recordingHarness.outcomeObserver.outcomes.isEmpty, "late recording start cannot revive practice"
+  )
+
+  let recognitionHarness = Harness()
+  configurePractice(recognitionHarness)
+  recognitionHarness.pressAndRelease()
+  recognitionHarness.coordinator.cancelOnboardingPracticeSession()
+  recognitionHarness.recognizer.complete(.success("late practice recognition"))
+  check(
+    recognitionHarness.outcomeObserver.outcomes.isEmpty,
+    "closing practice discards an in-flight recognition result"
+  )
+
+  let insertionHarness = Harness()
+  configurePractice(insertionHarness)
+  insertionHarness.inserter.deferCompletion = true
+  insertionHarness.pressAndRelease()
+  insertionHarness.recognizer.complete(.success("late practice insertion"))
+  let pendingInsertion = insertionHarness.inserter.latestOperation
+  insertionHarness.coordinator.cancelOnboardingPracticeSession()
+  insertionHarness.inserter.completeDeferred(.copied("late clipboard"))
+  check(pendingInsertion?.isCancelled == true, "closing practice cancels a pending insertion")
+  check(
+    insertionHarness.outcomeObserver.outcomes.isEmpty,
+    "late insertion completion cannot create a practice outcome or history candidate"
+  )
+
+  insertionHarness.inserter.deferCompletion = false
+  insertionHarness.pressAndRelease()
+  insertionHarness.recognizer.complete(.success("fresh practice"))
+  guard case .onboardingPractice? = insertionHarness.outcomeObserver.outcomes.last?.purpose else {
+    check(false, "a newly opened practice control receives only its own fresh outcome")
+    return
+  }
+  check(
+    insertionHarness.outcomeObserver.outcomes.count == 1,
+    "reopening practice does not resurrect a prior attempt"
+  )
+}
+
 @main
 enum CoordinatorHarnessMain {
   static func main() {
@@ -1043,6 +1195,9 @@ enum CoordinatorHarnessMain {
     testOutcomeAndMicrophoneTestBoundaries()
     testPracticeBindingIsLiveForEveryRetry()
     testReceiptEndsOnExpiryFocusChangeAndNewPress()
+    testDirectSessionCancelsWhenAccessibilityIsRevoked()
+    testHotkeyRebindCancelsHeldSession()
+    testClosingPracticeCancelsOnlyTheClaimedSession()
     testCommonModeTimerRunsDuringMenuTracking()
     print("coordinator harness passed")
   }

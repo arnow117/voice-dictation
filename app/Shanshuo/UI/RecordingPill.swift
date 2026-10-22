@@ -17,6 +17,8 @@ protocol RecordingSoundPlaying: AnyObject {
   func playStart()
 }
 
+extension SystemRecordingSoundPlayer: SoundPreferenceControlling {}
+
 final class SystemRecordingSoundPlayer: RecordingSoundPlaying {
   var isEnabled = true
 

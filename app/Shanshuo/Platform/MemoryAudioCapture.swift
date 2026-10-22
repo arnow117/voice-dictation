@@ -50,24 +50,37 @@ final class MemoryAudioCapture: AudioCapturing {
   static let sampleRate = 16_000
   private static let maximumSamples = Int(DictationRules.maximumRecording) * sampleRate
 
-  private let engine: AVAudioEngine
-  private let inputDeviceConfigurator: InputDeviceConfiguring
-  private let engineQueue = DispatchQueue(
-    label: "com.arnow117.shanshuo.audio-engine",
-    qos: .userInitiated
-  )
+  private var engine: AVAudioEngine
+  private var inputDeviceConfigurator: InputDeviceConfiguring
+  private let engineQueue: DispatchQueue
+  private let engineEvents: AudioEngineEventObserving
+  private let makeEngine: () -> AVAudioEngine
+  private let makeInputDeviceConfigurator: (AVAudioEngine) -> InputDeviceConfiguring
+  private let availabilityProvider: (() -> Bool)?
+  private let inputFormatProvider: (() -> InputFormatSignature?)?
+  private let configurationConfirmationTimeout: DispatchTimeInterval
+  private let prepareEngine: (AVAudioEngine) -> Void
   private let stateLock = NSLock()
   private var converter: AVAudioConverter?
   private var samples: [Float] = []
   private var levelHandler: ((Float) -> Void)?
   private var activeOperationIdentifier: UInt64?
-  private weak var activeOperation: MemoryAudioCaptureOperation?
+  // The engine queue must retain an operation until its queued start/stop work has released the
+  // input tap. A weak reference can disappear after a natural microphone-test stop, leaving an
+  // engine stop closure with nothing to execute.
+  private var activeOperation: MemoryAudioCaptureOperation?
   private var nextOperationIdentifier: UInt64 = 0
   private var isRunning = false
   private var cachedAvailability = false
   private var tapIsInstalled = false
   private var engineEventObservation: AudioEngineEventObservation?
   private var requestedInputDeviceUID: String?
+  private var preparedInputRoute: PreparedInputRoute?
+  private var activePreparation: InputPreparation?
+  private var pendingPreparation: PendingPreparation?
+  private var nextPreparationGeneration: UInt64 = 0
+  private var engineConfigurationEpoch: UInt64 = 0
+  private var engineInstanceEpoch: UInt64 = 0
 
   var onInterruption: ((AudioCaptureOperation) -> Void)? {
     get {
@@ -86,14 +99,34 @@ final class MemoryAudioCapture: AudioCapturing {
   init(
     engine: AVAudioEngine = AVAudioEngine(),
     engineEvents: AudioEngineEventObserving = SystemAudioEngineEventSource(),
-    inputDeviceConfigurator: InputDeviceConfiguring? = nil
+    inputDeviceConfigurator: InputDeviceConfiguring? = nil,
+    engineQueue: DispatchQueue? = nil,
+    availabilityProvider: (() -> Bool)? = nil,
+    inputFormatProvider: (() -> InputFormatSignature?)? = nil,
+    configurationConfirmationTimeout: DispatchTimeInterval = .seconds(2),
+    prepareEngine: ((AVAudioEngine) -> Void)? = nil,
+    engineFactory: @escaping () -> AVAudioEngine = { AVAudioEngine() }
   ) {
     self.engine = engine
-    self.inputDeviceConfigurator =
-      inputDeviceConfigurator ?? EngineInputDeviceConfigurator(inputNode: engine.inputNode)
-    engineEventObservation = engineEvents.observe(engine: engine) { [weak self] in
-      self?.handleEngineConfigurationChange()
+    self.engineQueue =
+      engineQueue
+      ?? DispatchQueue(label: "com.arnow117.shanshuo.audio-engine", qos: .userInitiated)
+    if let inputDeviceConfigurator {
+      self.inputDeviceConfigurator = inputDeviceConfigurator
+      makeInputDeviceConfigurator = { _ in inputDeviceConfigurator }
+    } else {
+      self.inputDeviceConfigurator = EngineInputDeviceConfigurator(inputNode: engine.inputNode)
+      makeInputDeviceConfigurator = { replacementEngine in
+        EngineInputDeviceConfigurator(inputNode: replacementEngine.inputNode)
+      }
     }
+    self.engineEvents = engineEvents
+    makeEngine = engineFactory
+    self.availabilityProvider = availabilityProvider
+    self.inputFormatProvider = inputFormatProvider
+    self.configurationConfirmationTimeout = configurationConfirmationTimeout
+    self.prepareEngine = prepareEngine ?? { $0.prepare() }
+    installEngineEventObservation()
   }
 
   deinit {
@@ -119,17 +152,24 @@ final class MemoryAudioCapture: AudioCapturing {
     set {
       stateLock.lock()
       requestedInputDeviceUID = newValue
+      let hasActiveOperation = activeOperationIdentifier != nil
       stateLock.unlock()
+      if !hasActiveOperation {
+        prepare()
+      }
     }
   }
 
   func prepare() {
+    let plan = currentInputDevicePlan()
     engineQueue.async { [weak self] in
       guard let self else {
         return
       }
-      self.engine.prepare()
-      self.updateAvailabilityOnEngineQueue()
+      guard !self.hasActiveOperation() else {
+        return
+      }
+      self.beginPreparation(for: plan, operationIdentifier: nil, completion: nil)
     }
   }
 
@@ -139,11 +179,12 @@ final class MemoryAudioCapture: AudioCapturing {
     completion: @escaping (AudioCaptureOperation, Result<Void, Error>) -> Void
   ) -> AudioCaptureOperation {
     let operation = makeOperation()
-    engineQueue.async { [weak self, weak operation] in
-      guard let self, let operation else {
+    let lease = QueuedAudioOperationLease(operation)
+    engineQueue.async { [weak self, lease] in
+      guard let self else {
         return
       }
-      self.startOnEngineQueue(operation, onLevel: onLevel, completion: completion)
+      self.startOnEngineQueue(lease.operation, onLevel: onLevel, completion: completion)
     }
     return operation
   }
@@ -155,11 +196,12 @@ final class MemoryAudioCapture: AudioCapturing {
       }
       return
     }
-    engineQueue.async { [weak self, weak operation] in
-      guard let self, let operation else {
+    let lease = QueuedAudioOperationLease(operation)
+    engineQueue.async { [weak self, lease] in
+      guard let self else {
         return
       }
-      let audio = self.stopOnEngineQueue(operation)
+      let audio = self.stopOnEngineQueue(lease.operation)
       DispatchQueue.main.async {
         completion(audio)
       }
@@ -194,15 +236,61 @@ final class MemoryAudioCapture: AudioCapturing {
       return
     }
 
-    stopEngineOnEngineQueue()
-    guard isCurrent(operation) else {
+    guard
+      let resolvedRoute = InputDeviceSessionConfigurator.resolve(
+        plan: operation.inputDevicePlan,
+        using: inputDeviceConfigurator
+      )
+    else {
+      markInputPlanUnready()
+      completeStart(
+        operation,
+        result: .failure(AudioCaptureError.unavailable),
+        completion: completion
+      )
       return
     }
 
-    guard configureInputDeviceForNewOperationOnEngineQueue(operation) else {
-      updateAvailabilityOnEngineQueue()
-      completeStart(
-        operation, result: .failure(AudioCaptureError.unavailable), completion: completion)
+    if activePreparation == nil, preparedRouteMatches(resolvedRoute) {
+      armCaptureOnEngineQueue(
+        operation,
+        resolvedRoute: resolvedRoute,
+        onLevel: onLevel,
+        completion: completion
+      )
+      return
+    }
+
+    beginPreparation(
+      for: operation.inputDevicePlan,
+      resolvedRoute: resolvedRoute,
+      operationIdentifier: operation.identifier
+    ) {
+      [weak self, operation] didPrepare in
+      guard let self, self.isCurrent(operation) else {
+        return
+      }
+      guard didPrepare else {
+        self.completeStart(
+          operation, result: .failure(AudioCaptureError.unavailable), completion: completion)
+        return
+      }
+      self.armCaptureOnEngineQueue(
+        operation,
+        resolvedRoute: resolvedRoute,
+        onLevel: onLevel,
+        completion: completion
+      )
+    }
+  }
+
+  private func armCaptureOnEngineQueue(
+    _ operation: MemoryAudioCaptureOperation,
+    resolvedRoute: ResolvedInputDevicePlan,
+    onLevel: @escaping (Float) -> Void,
+    completion: @escaping (AudioCaptureOperation, Result<Void, Error>) -> Void
+  ) {
+    guard isCurrent(operation), preparedRouteMatches(resolvedRoute) else {
       return
     }
 
@@ -217,7 +305,7 @@ final class MemoryAudioCapture: AudioCapturing {
       ),
       let converter = AVAudioConverter(from: inputFormat, to: outputFormat)
     else {
-      updateAvailabilityOnEngineQueue()
+      markInputPlanUnready()
       completeStart(
         operation, result: .failure(AudioCaptureError.unavailable), completion: completion)
       return
@@ -236,8 +324,8 @@ final class MemoryAudioCapture: AudioCapturing {
     }
 
     input.installTap(onBus: 0, bufferSize: 1_024, format: inputFormat) {
-      [weak self, weak operation] buffer, _ in
-      guard let self, let operation else {
+      [weak self, operation] buffer, _ in
+      guard let self else {
         return
       }
       self.consume(buffer, operation: operation)
@@ -249,13 +337,12 @@ final class MemoryAudioCapture: AudioCapturing {
       try engine.start()
     } catch {
       stopEngineOnEngineQueue()
-      updateAvailabilityOnEngineQueue()
+      markInputPlanUnready()
       completeStart(
         operation, result: .failure(AudioCaptureError.failedToStart), completion: completion)
       return
     }
 
-    updateAvailabilityOnEngineQueue()
     guard isCurrent(operation) else {
       stopEngineOnEngineQueue()
       return
@@ -267,6 +354,7 @@ final class MemoryAudioCapture: AudioCapturing {
     guard isCurrent(operation) else {
       return Self.emptyAudio
     }
+    activePreparation = nil
     stopEngineOnEngineQueue()
 
     stateLock.lock()
@@ -301,7 +389,11 @@ final class MemoryAudioCapture: AudioCapturing {
     stateLock.unlock()
 
     engineQueue.async { [weak self] in
-      self?.stopEngineOnEngineQueue()
+      guard let self else {
+        return
+      }
+      self.discardPendingPreparation(for: operationIdentifier)
+      self.stopEngineOnEngineQueue()
     }
   }
 
@@ -382,16 +474,50 @@ final class MemoryAudioCapture: AudioCapturing {
     engine.stop()
   }
 
-  private func handleEngineConfigurationChange() {
-    engineQueue.async { [weak self] in
-      self?.interruptActiveOperationOnEngineQueue()
+  private func installEngineEventObservation() {
+    let observedEngineEpoch = engineInstanceEpoch
+    engineEventObservation = engineEvents.observe(engine: engine) { [weak self] in
+      self?.handleEngineConfigurationChange(for: observedEngineEpoch)
     }
+  }
+
+  private func handleEngineConfigurationChange(for observedEngineEpoch: UInt64) {
+    engineQueue.async { [weak self] in
+      guard let self, self.engineInstanceEpoch == observedEngineEpoch else {
+        return
+      }
+      self.handleEngineConfigurationChangeOnEngineQueue()
+    }
+  }
+
+  private func handleEngineConfigurationChangeOnEngineQueue() {
+    engineConfigurationEpoch &+= 1
+    if var preparation = activePreparation {
+      // `setDeviceID` can deliver this notification after it returns. This ticket has not armed a
+      // tap, so record the new graph epoch and revalidate the same immutable route before it can
+      // become ready. The ticket's target ID is never resolved again here.
+      guard preparation.engineInstanceEpoch == engineInstanceEpoch else {
+        return
+      }
+      preparation.recordConfigurationChange(engineEpoch: engineConfigurationEpoch)
+      activePreparation = preparation
+      prepareEngine(engine)
+      schedulePreparationCommit(preparation)
+      return
+    }
+    preparedInputRoute = nil
+    let hadActiveOperation = hasActiveOperation()
+    if hadActiveOperation {
+      interruptActiveOperationOnEngineQueue()
+    }
+    markInputPlanUnready()
+    beginPreparation(for: currentInputDevicePlan(), operationIdentifier: nil, completion: nil)
   }
 
   private func interruptActiveOperationOnEngineQueue() {
     let interruptedOperation = invalidateActiveOperation()
     stopEngineOnEngineQueue()
-    updateAvailabilityOnEngineQueue()
+    markInputPlanUnready()
 
     guard let interruptedOperation else {
       return
@@ -402,29 +528,292 @@ final class MemoryAudioCapture: AudioCapturing {
     }
   }
 
-  private func updateAvailabilityOnEngineQueue() {
+  /// Physical input format is only one prerequisite. The public cache becomes true later, after a
+  /// preparation ticket proves that this exact route and graph epoch are ready together.
+  private func inputIsPhysicallyAvailableOnEngineQueue() -> Bool {
+    if let availabilityProvider {
+      return availabilityProvider()
+    }
     let format = engine.inputNode.outputFormat(forBus: 0)
+    return format.sampleRate > 0 && format.channelCount > 0
+  }
+
+  private func currentInputFormatSignature() -> InputFormatSignature? {
+    if let inputFormatProvider {
+      return inputFormatProvider()
+    }
+
+    let format = engine.inputNode.outputFormat(forBus: 0)
+    guard format.sampleRate > 0, format.channelCount > 0 else {
+      return nil
+    }
+    return InputFormatSignature(sampleRate: format.sampleRate, channelCount: format.channelCount)
+  }
+
+  private func preparedRouteMatches(_ resolvedRoute: ResolvedInputDevicePlan) -> Bool {
+    guard let preparedInputRoute,
+      preparedInputRoute.plan == resolvedRoute.plan,
+      preparedInputRoute.deviceID == resolvedRoute.deviceID,
+      preparedInputRoute.deviceUID == resolvedRoute.deviceUID,
+      preparedInputRoute.engineInstanceEpoch == engineInstanceEpoch,
+      preparedInputRoute.configurationEpoch == engineConfigurationEpoch,
+      inputDeviceConfigurator.currentInputDeviceID() == resolvedRoute.deviceID,
+      currentInputFormatSignature() == preparedInputRoute.inputFormat
+    else {
+      return false
+    }
+    return true
+  }
+
+  private func beginPreparation(
+    for plan: InputDeviceSessionPlan,
+    resolvedRoute: ResolvedInputDevicePlan? = nil,
+    operationIdentifier: UInt64?,
+    completion: ((Bool) -> Void)?
+  ) {
+    guard !isRunning else {
+      completion?(false)
+      return
+    }
+
+    if activePreparation != nil {
+      guard
+        let pendingResolvedRoute = resolvedRoute
+          ?? InputDeviceSessionConfigurator.resolve(
+            plan: plan,
+            using: inputDeviceConfigurator
+          )
+      else {
+        markInputPlanUnready()
+        completion?(false)
+        return
+      }
+      pendingPreparation = PendingPreparation(
+        plan: plan,
+        resolvedRoute: pendingResolvedRoute,
+        operationIdentifier: operationIdentifier,
+        completion: completion
+      )
+      return
+    }
+
+    stopEngineOnEngineQueue()
+    guard
+      let resolvedRoute = resolvedRoute
+        ?? InputDeviceSessionConfigurator.resolve(
+          plan: plan,
+          using: inputDeviceConfigurator
+        )
+    else {
+      markInputPlanUnready()
+      completion?(false)
+      return
+    }
+
+    let deviceAlreadyApplied =
+      inputDeviceConfigurator.currentInputDeviceID() == resolvedRoute.deviceID
+    nextPreparationGeneration &+= 1
+    let preparation = InputPreparation(
+      generation: nextPreparationGeneration,
+      revision: 0,
+      plan: plan,
+      operationIdentifier: operationIdentifier,
+      targetDeviceID: resolvedRoute.deviceID,
+      targetDeviceUID: resolvedRoute.deviceUID,
+      engineInstanceEpoch: engineInstanceEpoch,
+      engineEpoch: engineConfigurationEpoch,
+      requiresConfigurationConfirmation: !deviceAlreadyApplied,
+      observedConfigurationConfirmation: false,
+      completion: completion
+    )
+    activePreparation = preparation
+    preparedInputRoute = nil
+
+    guard
+      deviceAlreadyApplied
+        || InputDeviceSessionConfigurator.apply(
+          resolvedRoute.deviceID, using: inputDeviceConfigurator)
+    else {
+      markInputPlanUnready()
+      finishPreparation(preparation, didPrepare: false)
+      return
+    }
+
+    prepareEngine(engine)
+    if preparation.requiresConfigurationConfirmation {
+      scheduleConfigurationConfirmationTimeout(preparation)
+    } else {
+      schedulePreparationCommit(preparation)
+    }
+  }
+
+  private func schedulePreparationCommit(_ preparation: InputPreparation) {
+    engineQueue.async { [weak self] in
+      guard let self else {
+        return
+      }
+      self.commitPreparation(preparation)
+    }
+  }
+
+  /// A timeout is only a safe rejection path. It never makes a device plan ready: an actual route
+  /// change must first deliver a graph configuration event for this generation.
+  private func scheduleConfigurationConfirmationTimeout(_ preparation: InputPreparation) {
+    engineQueue.asyncAfter(deadline: .now() + configurationConfirmationTimeout) { [weak self] in
+      guard let self, self.activePreparation == preparation,
+        preparation.requiresConfigurationConfirmation,
+        !preparation.observedConfigurationConfirmation
+      else {
+        return
+      }
+      self.failTimedOutPreparation(preparation)
+    }
+  }
+
+  private func commitPreparation(_ expected: InputPreparation) {
+    guard activePreparation == expected,
+      expected.engineInstanceEpoch == engineInstanceEpoch,
+      expected.engineEpoch == engineConfigurationEpoch,
+      !expected.requiresConfigurationConfirmation || expected.observedConfigurationConfirmation
+    else {
+      return
+    }
+
+    let isPreparedForExpectedDevice =
+      expected.targetDeviceID == inputDeviceConfigurator.currentInputDeviceID()
+    let inputIsPhysicallyAvailable = inputIsPhysicallyAvailableOnEngineQueue()
+    let inputFormat = currentInputFormatSignature()
+    let didPrepare =
+      isPreparedForExpectedDevice && inputIsPhysicallyAvailable
+      && inputFormat != nil
+    if let inputFormat, didPrepare {
+      preparedInputRoute = PreparedInputRoute(
+        plan: expected.plan,
+        deviceID: expected.targetDeviceID,
+        deviceUID: expected.targetDeviceUID,
+        engineInstanceEpoch: engineInstanceEpoch,
+        configurationEpoch: engineConfigurationEpoch,
+        inputFormat: inputFormat
+      )
+    }
+    publishPreparedAvailability(didPrepare)
+    finishPreparation(expected, didPrepare: didPrepare)
+  }
+
+  private func finishPreparation(_ preparation: InputPreparation, didPrepare: Bool) {
+    guard activePreparation == preparation else {
+      return
+    }
+    activePreparation = nil
+    if !didPrepare {
+      preparedInputRoute = nil
+    }
+    preparation.completion?(didPrepare)
+
+    guard let pending = pendingPreparation else {
+      return
+    }
+    pendingPreparation = nil
+    guard pending.operationIdentifier.map(isOperationIdentifierCurrent) ?? true else {
+      return
+    }
+
+    // If this ticket never received its required configuration event, its queue can still hold an
+    // arbitrarily late callback. Do not begin the queued request on the same engine: report it as
+    // unready instead, so that callback cannot be mistaken for the replacement ticket's event.
+    guard
+      didPrepare || !preparation.requiresConfigurationConfirmation
+        || preparation.observedConfigurationConfirmation
+    else {
+      pending.completion?(false)
+      return
+    }
+    beginPreparation(
+      for: pending.plan,
+      resolvedRoute: pending.resolvedRoute,
+      operationIdentifier: pending.operationIdentifier,
+      completion: pending.completion
+    )
+  }
+
+  /// A ticket that never receives its own graph-completion notification is not safe to reuse. A
+  /// replacement engine gives the next request a distinct notification source, so a late event
+  /// from this timed-out engine cannot confirm or interrupt that later request.
+  private func failTimedOutPreparation(_ preparation: InputPreparation) {
+    guard activePreparation == preparation else {
+      return
+    }
+
+    markInputPlanUnready()
+    activePreparation = nil
+    preparedInputRoute = nil
+    preparation.completion?(false)
+
+    if let pendingPreparation {
+      self.pendingPreparation = nil
+      if pendingPreparation.operationIdentifier.map(isOperationIdentifierCurrent) ?? true {
+        pendingPreparation.completion?(false)
+      }
+    }
+
+    retireEngineOnEngineQueue()
+  }
+
+  private func retireEngineOnEngineQueue() {
+    engineEventObservation?.cancel()
+    stopEngineOnEngineQueue()
+
+    engine = makeEngine()
+    inputDeviceConfigurator = makeInputDeviceConfigurator(engine)
+    tapIsInstalled = false
+    preparedInputRoute = nil
+    engineConfigurationEpoch = 0
+    engineInstanceEpoch &+= 1
+    installEngineEventObservation()
+    markInputPlanUnready()
+  }
+
+  private func publishPreparedAvailability(_ isAvailable: Bool) {
     stateLock.lock()
-    cachedAvailability = format.sampleRate > 0 && format.channelCount > 0
+    defer { stateLock.unlock() }
+    cachedAvailability = isAvailable
+  }
+
+  private func markInputPlanUnready() {
+    stateLock.lock()
+    cachedAvailability = false
     stateLock.unlock()
   }
 
-  /// Input choice is resolved only at the beginning of a new capture. Updating a preference while
-  /// recording never moves an active engine to another microphone; a missing selected UID simply
-  /// makes the next request unavailable until the user chooses another input or follows default.
-  private func configureInputDeviceForNewOperationOnEngineQueue(
-    _ operation: MemoryAudioCaptureOperation
-  ) -> Bool {
-    InputDeviceSessionConfigurator.configure(
-      plan: operation.inputDevicePlan,
-      using: inputDeviceConfigurator
-    )
+  private func currentInputDevicePlan() -> InputDeviceSessionPlan {
+    stateLock.lock()
+    defer { stateLock.unlock() }
+    return InputDeviceSessionPlan(preferredUID: requestedInputDeviceUID)
+  }
+
+  private func hasActiveOperation() -> Bool {
+    stateLock.lock()
+    defer { stateLock.unlock() }
+    return activeOperationIdentifier != nil
   }
 
   private func isCurrent(_ operation: MemoryAudioCaptureOperation) -> Bool {
     stateLock.lock()
     defer { stateLock.unlock() }
     return activeOperationIdentifier == operation.identifier
+  }
+
+  private func isOperationIdentifierCurrent(_ identifier: UInt64) -> Bool {
+    stateLock.lock()
+    defer { stateLock.unlock() }
+    return activeOperationIdentifier == identifier
+  }
+
+  private func discardPendingPreparation(for operationIdentifier: UInt64) {
+    guard pendingPreparation?.operationIdentifier == operationIdentifier else {
+      return
+    }
+    pendingPreparation = nil
   }
 
   private func invalidateActiveOperation() -> MemoryAudioCaptureOperation? {
@@ -482,8 +871,16 @@ private final class EngineInputDeviceConfigurator: InputDeviceConfiguring {
     SystemInputDevices.deviceID(for: uid)
   }
 
+  func deviceUID(for deviceID: AudioDeviceID) -> String? {
+    SystemInputDevices.deviceUID(for: deviceID)
+  }
+
   func defaultInputDeviceID() -> AudioDeviceID? {
     SystemInputDevices.defaultInputDeviceID()
+  }
+
+  func currentInputDeviceID() -> AudioDeviceID? {
+    inputNode.auAudioUnit.deviceID
   }
 
   func apply(deviceID: AudioDeviceID) throws {
@@ -495,6 +892,7 @@ private enum SystemInputDevices {
   static func available() -> [InputDevice] {
     allDeviceIDs().compactMap { deviceID in
       guard hasInputStreams(deviceID),
+        InputDeviceVisibility.shouldOffer(isPrivateAggregate: isPrivateAggregateDevice(deviceID)),
         let uid = stringProperty(deviceID, selector: kAudioDevicePropertyDeviceUID),
         let name = stringProperty(deviceID, selector: kAudioObjectPropertyName)
       else {
@@ -509,7 +907,14 @@ private enum SystemInputDevices {
     allDeviceIDs().first { deviceID in
       stringProperty(deviceID, selector: kAudioDevicePropertyDeviceUID) == uid
         && hasInputStreams(deviceID)
+        && InputDeviceVisibility.shouldOffer(
+          isPrivateAggregate: isPrivateAggregateDevice(deviceID)
+        )
     }
+  }
+
+  static func deviceUID(for deviceID: AudioDeviceID) -> String? {
+    stringProperty(deviceID, selector: kAudioDevicePropertyDeviceUID)
   }
 
   static func defaultInputDeviceID() -> AudioDeviceID? {
@@ -592,6 +997,26 @@ private enum SystemInputDevices {
     return buffers.pointee.mNumberBuffers > 0
   }
 
+  /// CoreAudio marks automatic default aggregates as private in their aggregate composition.
+  /// This excludes only process-private devices; user-created aggregates and virtual input
+  /// hardware remain selectable by stable UID.
+  private static func isPrivateAggregateDevice(_ deviceID: AudioDeviceID) -> Bool {
+    var address = AudioObjectPropertyAddress(
+      mSelector: kAudioAggregateDevicePropertyComposition,
+      mScope: kAudioObjectPropertyScopeGlobal,
+      mElement: kAudioObjectPropertyElementMain
+    )
+    var value: Unmanaged<CFDictionary>?
+    var byteCount = UInt32(MemoryLayout<Unmanaged<CFDictionary>?>.size)
+    guard AudioObjectGetPropertyData(deviceID, &address, 0, nil, &byteCount, &value) == noErr,
+      let composition = value?.takeUnretainedValue() as NSDictionary?,
+      let isPrivate = composition[kAudioAggregateDeviceIsPrivateKey] as? NSNumber
+    else {
+      return false
+    }
+    return isPrivate.boolValue
+  }
+
   private static func stringProperty(
     _ deviceID: AudioDeviceID, selector: AudioObjectPropertySelector
   )
@@ -609,6 +1034,60 @@ private enum SystemInputDevices {
     }
     return value?.takeUnretainedValue() as String?
   }
+}
+
+struct InputFormatSignature: Equatable {
+  let sampleRate: Double
+  let channelCount: AVAudioChannelCount
+}
+
+private struct PreparedInputRoute: Equatable {
+  let plan: InputDeviceSessionPlan
+  let deviceID: AudioDeviceID
+  let deviceUID: String?
+  let engineInstanceEpoch: UInt64
+  let configurationEpoch: UInt64
+  let inputFormat: InputFormatSignature
+}
+
+struct InputPreparation: Equatable {
+  let generation: UInt64
+  var revision: UInt64
+  let plan: InputDeviceSessionPlan
+  let operationIdentifier: UInt64?
+  let targetDeviceID: AudioDeviceID
+  let targetDeviceUID: String?
+  let engineInstanceEpoch: UInt64
+  var engineEpoch: UInt64
+  let requiresConfigurationConfirmation: Bool
+  var observedConfigurationConfirmation: Bool
+  let completion: ((Bool) -> Void)?
+
+  static func == (lhs: InputPreparation, rhs: InputPreparation) -> Bool {
+    lhs.generation == rhs.generation
+      && lhs.revision == rhs.revision
+      && lhs.plan == rhs.plan
+      && lhs.operationIdentifier == rhs.operationIdentifier
+      && lhs.targetDeviceID == rhs.targetDeviceID
+      && lhs.targetDeviceUID == rhs.targetDeviceUID
+      && lhs.engineInstanceEpoch == rhs.engineInstanceEpoch
+      && lhs.engineEpoch == rhs.engineEpoch
+      && lhs.requiresConfigurationConfirmation == rhs.requiresConfigurationConfirmation
+      && lhs.observedConfigurationConfirmation == rhs.observedConfigurationConfirmation
+  }
+
+  mutating func recordConfigurationChange(engineEpoch: UInt64) {
+    revision &+= 1
+    self.engineEpoch = engineEpoch
+    observedConfigurationConfirmation = true
+  }
+}
+
+private struct PendingPreparation {
+  let plan: InputDeviceSessionPlan
+  let resolvedRoute: ResolvedInputDevicePlan
+  let operationIdentifier: UInt64?
+  let completion: ((Bool) -> Void)?
 }
 
 private final class MemoryAudioCaptureOperation: AudioCaptureOperation {

@@ -208,12 +208,6 @@ final class SystemFocusInspector: FocusInspecting {
   }
 }
 
-enum HoldShortcut: Equatable {
-  case function
-  case rightOption
-  case copyOnlyControlShiftSpace
-}
-
 protocol HotkeyMonitoring: AnyObject {
   var isShortcutAvailable: Bool { get }
   var onHold: ((HoldShortcut, Bool) -> Void)? { get set }
@@ -222,6 +216,7 @@ protocol HotkeyMonitoring: AnyObject {
   var selectedShortcut: HoldShortcut { get set }
   func refresh(accessibilityAuthorized: Bool)
   func setCancellationInterception(_ enabled: Bool)
+  func setTriggeringSuspended(_ suspended: Bool)
   func stop()
 }
 
@@ -242,8 +237,11 @@ final class SystemHotkeyMonitor: HotkeyMonitoring {
   private var runLoopSource: CFRunLoopSource?
   private var functionDown = false
   private var rightOptionDown = false
+  private var singleModifierKeyCode: UInt16?
+  private var customShortcutState = CustomHoldShortcutEventReducer()
   private var accessibilityAuthorized = false
   private var cancellationInterception = false
+  private var triggeringSuspended = false
   private var carbonShortcut: EventHotKeyRef?
   private var carbonEscapeShortcuts: [EventHotKeyRef] = []
   private var carbonHandler: EventHandlerRef?
@@ -273,6 +271,19 @@ final class SystemHotkeyMonitor: HotkeyMonitoring {
       return
     }
     setCarbonEscape(enabled)
+  }
+
+  func setTriggeringSuspended(_ suspended: Bool) {
+    triggeringSuspended = suspended
+    customShortcutState.reset()
+    functionDown = false
+    rightOptionDown = false
+    singleModifierKeyCode = nil
+    if suspended {
+      unregisterCarbonShortcut(&carbonShortcut)
+      return
+    }
+    updateCarbonShortcutRegistration()
   }
 
   func stop() {
@@ -337,6 +348,8 @@ final class SystemHotkeyMonitor: HotkeyMonitoring {
     runLoopSource = nil
     functionDown = false
     rightOptionDown = false
+    singleModifierKeyCode = nil
+    customShortcutState.reset()
     if accessibilityAuthorized {
       isShortcutAvailable = false
     }
@@ -350,6 +363,12 @@ final class SystemHotkeyMonitor: HotkeyMonitoring {
       return Unmanaged.passUnretained(event)
     }
 
+    // Shortcut recording is handled by the settings window's first responder. The global tap
+    // remains installed but must neither begin a session nor consume the candidate key.
+    guard !triggeringSuspended else {
+      return Unmanaged.passUnretained(event)
+    }
+
     let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
     if type == .flagsChanged {
       if keyCode == Int64(kVK_Function) {
@@ -358,6 +377,8 @@ final class SystemHotkeyMonitor: HotkeyMonitoring {
         let deviceRightOptionMask: UInt64 = 0x40
         updateRightOption(isDown: event.flags.rawValue & deviceRightOptionMask != 0)
       }
+      updateSingleModifierShortcut(keyCode: UInt16(keyCode), flags: event.flags)
+      updateCustomShortcutForModifierChange(event: event)
       return Unmanaged.passUnretained(event)
     }
 
@@ -369,11 +390,25 @@ final class SystemHotkeyMonitor: HotkeyMonitoring {
       return shouldConsume ? nil : Unmanaged.passUnretained(event)
     }
 
+    if let result = handleCustomShortcutKeyEvent(type: type, event: event) {
+      return result ? nil : Unmanaged.passUnretained(event)
+    }
+
     if type == .keyDown,
       event.getIntegerValueField(.keyboardEventAutorepeat) == 0,
-      functionDown || rightOptionDown
+      functionDown || rightOptionDown || singleModifierKeyCode != nil
+        || customShortcutState.isHolding
     {
-      onOtherKey?()
+      let holdsLegacyShortcut =
+        functionDown || rightOptionDown || singleModifierKeyCode != nil
+      let shouldCancel = Self.reduceOtherKey(
+        state: &customShortcutState,
+        legacyShortcutIsHolding: holdsLegacyShortcut
+      )
+      singleModifierKeyCode = nil
+      if shouldCancel {
+        onOtherKey?()
+      }
     }
     return Unmanaged.passUnretained(event)
   }
@@ -383,8 +418,8 @@ final class SystemHotkeyMonitor: HotkeyMonitoring {
       return
     }
     functionDown = isDown
-    if selectedShortcut == .function {
-      onHold?(.function, isDown)
+    if isFunctionShortcut(selectedShortcut) {
+      onHold?(selectedShortcut, isDown)
     }
   }
 
@@ -401,14 +436,58 @@ final class SystemHotkeyMonitor: HotkeyMonitoring {
     return shouldConsume
   }
 
+  /// Routes an unrelated key through the same reducer used by the event tap. The reducer clears
+  /// the held session but intentionally keeps the physical trigger until its final key-up, so
+  /// repeats and the release cannot leak into the target application after cancellation.
+  static func reduceOtherKey(
+    state: inout CustomHoldShortcutEventReducer,
+    legacyShortcutIsHolding: Bool
+  ) -> Bool {
+    let customEffect = state.otherKeyPressed()
+    return legacyShortcutIsHolding || customEffect == .cancelAndConsume
+  }
+
   private func updateRightOption(isDown: Bool) {
     guard rightOptionDown != isDown else {
       return
     }
     rightOptionDown = isDown
-    if selectedShortcut == .rightOption {
-      onHold?(.rightOption, isDown)
+    if isRightOptionShortcut(selectedShortcut) {
+      onHold?(selectedShortcut, isDown)
     }
+  }
+
+  private func updateSingleModifierShortcut(keyCode: UInt16, flags: CGEventFlags) {
+    guard let expectedModifier = modifier(for: keyCode) else {
+      return
+    }
+
+    guard expectedModifier != .function, expectedModifier != .rightOption else {
+      return
+    }
+    guard isSingleModifierShortcut(selectedShortcut, modifier: expectedModifier) else {
+      if singleModifierKeyCode != nil, singleModifierKeyCode != keyCode {
+        singleModifierKeyCode = nil
+        onOtherKey?()
+      }
+      return
+    }
+
+    let isDown = modifier(expectedModifier, isDownIn: flags)
+    if isDown {
+      guard singleModifierKeyCode != keyCode else {
+        return
+      }
+      singleModifierKeyCode = keyCode
+      onHold?(selectedShortcut, true)
+      return
+    }
+
+    guard singleModifierKeyCode == keyCode else {
+      return
+    }
+    singleModifierKeyCode = nil
+    onHold?(selectedShortcut, false)
   }
 
   private func installCarbonHandler() {
@@ -438,8 +517,11 @@ final class SystemHotkeyMonitor: HotkeyMonitoring {
   }
 
   private func updateCarbonShortcutRegistration() {
-    let needsCopyOnlyShortcut =
-      !accessibilityAuthorized || selectedShortcut == .copyOnlyControlShiftSpace
+    if triggeringSuspended {
+      unregisterCarbonShortcut(&carbonShortcut)
+      return
+    }
+    let needsCopyOnlyShortcut = !accessibilityAuthorized
     guard needsCopyOnlyShortcut else {
       unregisterCarbonShortcut(&carbonShortcut)
       if accessibilityAuthorized {
@@ -478,9 +560,7 @@ final class SystemHotkeyMonitor: HotkeyMonitoring {
       &identifier
     )
     let pressed = GetEventKind(event) == UInt32(kEventHotKeyPressed)
-    if identifier.id == 1,
-      !accessibilityAuthorized || selectedShortcut == .copyOnlyControlShiftSpace
-    {
+    if identifier.id == 1, !accessibilityAuthorized, !triggeringSuspended {
       onHold?(.copyOnlyControlShiftSpace, pressed)
     } else if identifier.id != 1, pressed {
       onCancel?()
@@ -517,5 +597,142 @@ final class SystemHotkeyMonitor: HotkeyMonitoring {
       UnregisterEventHotKey(shortcut)
     }
     shortcut = nil
+  }
+
+  /// Returns `true` when the custom trigger must be consumed. The reducer keeps consuming the
+  /// trigger through its final key-up after a required modifier has already ended the session.
+  private func handleCustomShortcutKeyEvent(type: CGEventType, event: CGEvent) -> Bool? {
+    guard let descriptor = selectedShortcut.descriptor,
+      let keyCode = descriptor.keyCode
+    else {
+      return nil
+    }
+
+    let eventKeyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
+    guard eventKeyCode == keyCode else {
+      return nil
+    }
+
+    switch type {
+    case .keyDown:
+      let isAutorepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
+      let effect = customShortcutState.keyDown(
+        keyCode: eventKeyCode,
+        modifiers: eventModifiers(event.flags),
+        descriptor: descriptor,
+        isAutorepeat: isAutorepeat
+      )
+      switch effect {
+      case .beginAndConsume:
+        onHold?(selectedShortcut, true)
+        return true
+      case .consume:
+        return true
+      case .passThrough:
+        return false
+      case .endAndConsume, .cancelAndConsume:
+        return true
+      }
+    case .keyUp:
+      switch customShortcutState.keyUp(keyCode: eventKeyCode) {
+      case .endAndConsume:
+        onHold?(selectedShortcut, false)
+        return true
+      case .consume:
+        return true
+      case .passThrough:
+        return false
+      case .beginAndConsume, .cancelAndConsume:
+        return true
+      }
+    default:
+      return nil
+    }
+  }
+
+  private func updateCustomShortcutForModifierChange(event: CGEvent) {
+    guard let descriptor = selectedShortcut.descriptor,
+      descriptor.keyCode != nil
+    else {
+      return
+    }
+
+    let effect = customShortcutState.modifierStateChanged(
+      modifiers: eventModifiers(event.flags),
+      descriptor: descriptor
+    )
+    if effect == .endAndConsume {
+      onHold?(selectedShortcut, false)
+    }
+  }
+
+  private func eventModifiers(_ flags: CGEventFlags) -> HotkeyModifiers {
+    var modifiers: HotkeyModifiers = []
+    if flags.contains(.maskControl) {
+      modifiers.insert(.control)
+    }
+    if flags.contains(.maskShift) {
+      modifiers.insert(.shift)
+    }
+    let deviceRightOptionMask: UInt64 = 0x40
+    let rightOptionIsDown = flags.rawValue & deviceRightOptionMask != 0
+    if flags.contains(.maskAlternate), !rightOptionIsDown {
+      modifiers.insert(.option)
+    }
+    if rightOptionIsDown {
+      modifiers.insert(.rightOption)
+    }
+    if flags.contains(.maskCommand) {
+      modifiers.insert(.command)
+    }
+    if flags.contains(.maskSecondaryFn) {
+      modifiers.insert(.function)
+    }
+    return modifiers
+  }
+
+  private func isFunctionShortcut(_ shortcut: HoldShortcut) -> Bool {
+    shortcut == .function
+      || shortcut.descriptor == HotkeyDescriptor(keyCode: nil, modifiers: .function)
+  }
+
+  private func isRightOptionShortcut(_ shortcut: HoldShortcut) -> Bool {
+    shortcut == .rightOption
+      || shortcut.descriptor == HotkeyDescriptor(keyCode: nil, modifiers: .rightOption)
+  }
+
+  private func isSingleModifierShortcut(_ shortcut: HoldShortcut, modifier: HotkeyModifiers) -> Bool
+  {
+    shortcut.descriptor == HotkeyDescriptor(keyCode: nil, modifiers: modifier)
+  }
+
+  private func modifier(_ modifier: HotkeyModifiers, isDownIn flags: CGEventFlags) -> Bool {
+    switch modifier {
+    case .control:
+      return flags.contains(.maskControl)
+    case .shift:
+      return flags.contains(.maskShift)
+    case .option:
+      return flags.contains(.maskAlternate)
+    case .command:
+      return flags.contains(.maskCommand)
+    default:
+      return false
+    }
+  }
+
+  private func modifier(for keyCode: UInt16) -> HotkeyModifiers? {
+    switch keyCode {
+    case UInt16(kVK_Control):
+      return .control
+    case UInt16(kVK_Shift):
+      return .shift
+    case UInt16(kVK_Option):
+      return .option
+    case UInt16(kVK_Command):
+      return .command
+    default:
+      return nil
+    }
   }
 }

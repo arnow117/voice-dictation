@@ -11,6 +11,7 @@ struct AppStatusSnapshot {
   let isShortcutAvailable: Bool
   let pause: PauseSnapshot
   let historyEnabled: Bool
+  let soundEnabled: Bool
   let onboardingProgress: OnboardingProgress
   let historyFailure: HistoryStoreError?
 
@@ -26,9 +27,19 @@ struct AppStatusSnapshot {
 /// audio session, model files, or SQLite connection; it only translates user actions into commands
 /// for their respective single owners and publishes a live snapshot for native views.
 final class AppModel {
+  private enum HistoryOperation: Hashable {
+    case open
+    case query
+    case write
+    case delete
+    case clear
+    case cleanup
+  }
+
   private enum Key {
     static let preferredShortcut = "hotkey.preferred"
     static let historyEnabled = "history.enabled"
+    static let soundEnabled = "recording.sound-enabled"
   }
 
   private let permissions: PermissionRequesting
@@ -39,6 +50,7 @@ final class AppModel {
   private let historyStore: HistoryStore
   private let pauseController: PauseController
   private let progressStore: OnboardingProgressStore
+  private let soundPreference: SoundPreferenceControlling
   private let defaults: UserDefaults
   private let targetAppName: (TargetSnapshot) -> String?
   private var modelObservation: UUID?
@@ -46,7 +58,7 @@ final class AppModel {
   private var outcomeObservers: [UUID: (SessionOutcome) -> Void] = [:]
   private var historyWriteGeneration: UInt64 = 0
   private var historyEnabled: Bool
-  private var historyFailure: HistoryStoreError?
+  private var historyFailureState = OperationFailureState<HistoryStoreError, HistoryOperation>()
   private var progress: OnboardingProgress
   private var lastCleanupAt: Date?
   private var shortcutTestSawPress = false
@@ -62,6 +74,7 @@ final class AppModel {
     historyStore: HistoryStore,
     pauseController: PauseController = PauseController(),
     progressStore: OnboardingProgressStore = OnboardingProgressStore(),
+    soundPreference: SoundPreferenceControlling = NoopSoundPreferenceController(),
     defaults: UserDefaults = .standard,
     targetAppName: @escaping (TargetSnapshot) -> String? = AppModel.defaultTargetAppName
   ) {
@@ -73,6 +86,7 @@ final class AppModel {
     self.historyStore = historyStore
     self.pauseController = pauseController
     self.progressStore = progressStore
+    self.soundPreference = soundPreference
     self.defaults = defaults
     self.targetAppName = targetAppName
     if defaults.object(forKey: Key.historyEnabled) == nil {
@@ -83,6 +97,13 @@ final class AppModel {
     }
     progress = progressStore.load()
 
+    if defaults.object(forKey: Key.soundEnabled) == nil {
+      defaults.set(true, forKey: Key.soundEnabled)
+      soundPreference.isEnabled = true
+    } else {
+      soundPreference.isEnabled = defaults.bool(forKey: Key.soundEnabled)
+    }
+
     hotkeys.selectedShortcut = preferredShortcutFromDefaults()
     audioCapture.selectedInputDeviceUID = defaults.string(forKey: selectedInputDeviceKey)
     modelObservation = modelManager.observe { [weak self] _ in
@@ -92,7 +113,7 @@ final class AppModel {
       guard let self else {
         return
       }
-      self.handleHistoryOperation(result)
+      self.handleHistoryOperation(result, operation: .open)
       guard case .success = result else {
         return
       }
@@ -151,9 +172,44 @@ final class AppModel {
 
   func setPreferredShortcut(_ shortcut: HoldShortcut) {
     requireMainThread()
+    coordinator.cancelForHotkeyRebind()
     defaults.set(shortcut.storageValue, forKey: Key.preferredShortcut)
     hotkeys.selectedShortcut = shortcut
     hotkeys.refresh(accessibilityAuthorized: permissions.accessibilityPermission.isAuthorized)
+    publish()
+  }
+
+  func beginShortcutRecording() {
+    requireMainThread()
+    coordinator.cancelForHotkeyRebind()
+    hotkeys.setTriggeringSuspended(true)
+    publish()
+  }
+
+  func commitRecordedShortcut(_ shortcut: HoldShortcut) -> String? {
+    requireMainThread()
+    guard shortcut.descriptor?.isValid != false else {
+      return "这个快捷键不能注册"
+    }
+    defaults.set(shortcut.storageValue, forKey: Key.preferredShortcut)
+    hotkeys.selectedShortcut = shortcut
+    hotkeys.setTriggeringSuspended(false)
+    hotkeys.refresh(accessibilityAuthorized: permissions.accessibilityPermission.isAuthorized)
+    publish()
+    return hotkeys.isShortcutAvailable ? nil : "快捷键当前不可用，请检查系统快捷键设置"
+  }
+
+  func cancelShortcutRecording() {
+    requireMainThread()
+    hotkeys.setTriggeringSuspended(false)
+    hotkeys.refresh(accessibilityAuthorized: permissions.accessibilityPermission.isAuthorized)
+    publish()
+  }
+
+  func setSoundEnabled(_ enabled: Bool) {
+    requireMainThread()
+    defaults.set(enabled, forKey: Key.soundEnabled)
+    soundPreference.isEnabled = enabled
     publish()
   }
 
@@ -189,7 +245,10 @@ final class AppModel {
 
   func historyRecords(completion: @escaping (Result<[HistoryRecord], HistoryStoreError>) -> Void) {
     requireMainThread()
-    historyStore.records(completion: completion)
+    historyStore.records { [weak self] result in
+      self?.handleHistoryOperation(result, operation: .query)
+      completion(result)
+    }
   }
 
   func deleteHistoryRecord(
@@ -200,14 +259,20 @@ final class AppModel {
     historyStore.delete(
       sessionID: record.sessionID,
       writeGeneration: historyWriteGeneration,
-      completion: completion
+      completion: { [weak self] result in
+        self?.handleHistoryOperation(result, operation: .delete)
+        completion(result)
+      }
     )
   }
 
   func clearHistory(completion: @escaping (Result<Void, HistoryStoreError>) -> Void) {
     requireMainThread()
     historyWriteGeneration &+= 1
-    historyStore.clear(writeGeneration: historyWriteGeneration, completion: completion)
+    historyStore.clear(writeGeneration: historyWriteGeneration) { [weak self] result in
+      self?.handleHistoryOperation(result, operation: .clear)
+      completion(result)
+    }
   }
 
   func handleSessionOutcome(_ outcome: SessionOutcome) {
@@ -226,7 +291,7 @@ final class AppModel {
       targetAppName: targetAppName(outcome.target),
       writeGeneration: historyWriteGeneration
     ) { [weak self] result in
-      self?.handleHistoryOperation(result)
+      self?.handleHistoryOperation(result, operation: .write)
     }
   }
 
@@ -294,6 +359,11 @@ final class AppModel {
     coordinator.endMicrophoneTest()
   }
 
+  func cancelOnboardingPracticeSession() {
+    requireMainThread()
+    coordinator.cancelOnboardingPracticeSession()
+  }
+
   /// Installs the onboarding window's live first-responder check. The provider runs immediately
   /// before every hold begins, so retrying after Esc, silence, or a short press cannot reuse a
   /// stale practice claim.
@@ -334,10 +404,10 @@ final class AppModel {
 
   private func snapshot() -> AppStatusSnapshot {
     let accessibilityAuthorized = permissions.accessibilityPermission.isAuthorized
-    let effectiveShortcut: HoldShortcut =
-      accessibilityAuthorized
-      ? hotkeys.selectedShortcut
-      : .copyOnlyControlShiftSpace
+    let effectiveShortcut = HotkeyProjection.effectiveShortcut(
+      preferred: hotkeys.selectedShortcut,
+      accessibilityAuthorized: accessibilityAuthorized
+    )
     return AppStatusSnapshot(
       microphonePermission: permissions.microphonePermission,
       accessibilityPermission: permissions.accessibilityPermission,
@@ -347,8 +417,9 @@ final class AppModel {
       isShortcutAvailable: hotkeys.isShortcutAvailable,
       pause: pauseController.snapshot(),
       historyEnabled: historyEnabled,
+      soundEnabled: soundPreference.isEnabled,
       onboardingProgress: progress,
-      historyFailure: historyFailure
+      historyFailure: historyFailureState.failure
     )
   }
 
@@ -368,11 +439,7 @@ final class AppModel {
   private func setHistoryEnabledOnStore() {
     historyStore.setEnabled(historyEnabled, writeGeneration: historyWriteGeneration) {
       [weak self] result in
-      guard case .failure(let error) = result else {
-        return
-      }
-      self?.historyFailure = error
-      self?.publish()
+      self?.handleHistoryOperation(result, operation: .write)
     }
   }
 
@@ -383,18 +450,16 @@ final class AppModel {
     }
     lastCleanupAt = now
     historyStore.removeExpired { [weak self] result in
-      self?.handleHistoryOperation(result)
+      self?.handleHistoryOperation(result, operation: .cleanup)
     }
   }
 
-  private func handleHistoryOperation<Value>(_ result: Result<Value, HistoryStoreError>) {
+  private func handleHistoryOperation<Value>(
+    _ result: Result<Value, HistoryStoreError>,
+    operation: HistoryOperation
+  ) {
     requireMainThread()
-    switch result {
-    case .success:
-      historyFailure = nil
-    case .failure(let error):
-      historyFailure = error
-    }
+    historyFailureState.record(result, operation: operation)
     publish()
   }
 
@@ -416,31 +481,5 @@ final class AppModel {
 
   private func requireMainThread() {
     dispatchPrecondition(condition: .onQueue(.main))
-  }
-}
-
-extension HoldShortcut {
-  fileprivate var storageValue: String {
-    switch self {
-    case .function:
-      return "function"
-    case .rightOption:
-      return "rightOption"
-    case .copyOnlyControlShiftSpace:
-      return "copyOnlyControlShiftSpace"
-    }
-  }
-
-  fileprivate init?(storageValue: String) {
-    switch storageValue {
-    case "function":
-      self = .function
-    case "rightOption":
-      self = .rightOption
-    case "copyOnlyControlShiftSpace":
-      self = .copyOnlyControlShiftSpace
-    default:
-      return nil
-    }
   }
 }

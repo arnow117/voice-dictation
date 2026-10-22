@@ -130,11 +130,13 @@ enum OnboardingStateHarness {
     )
 
     var practice = PracticeSessionState()
+    let copiedAttempt = UUID()
+    practice.beginAttempt(copiedAttempt, initialText: "")
     check(
       !practice.verifyPastedReadback("prefilled text"),
       "prefilled practice text has no matching copied-result evidence"
     )
-    practice.expectCopiedText("copied result")
+    practice.expectCopiedText("copied result", attemptID: copiedAttempt)
     check(
       !practice.verifyPastedReadback("copied result"),
       "typing a matching string without a paste request cannot complete practice"
@@ -149,9 +151,51 @@ enum OnboardingStateHarness {
       !practice.succeeded && practice.expectedPasteText == nil && !practice.pasteWasRequested,
       "closing or leaving practice clears its in-memory text evidence"
     )
+    let unverifiedAttempt = UUID()
+    practice.beginAttempt(unverifiedAttempt, initialText: "direct result")
     check(
-      practice.verifyDirectReadback("direct result", expectedText: "direct result"),
-      "direct practice requires an exact native control readback"
+      !practice.verifyDirectReadback(
+        "direct result",
+        expectedText: "direct result",
+        attemptID: unverifiedAttempt,
+        isVerifiedDirectInsertion: false
+      ),
+      "matching prefilled text cannot prove an unverified direct paste"
+    )
+    practice.notePasteRequest()
+    check(
+      !practice.verifyDirectReadback(
+        "direct result",
+        expectedText: "direct result",
+        attemptID: unverifiedAttempt,
+        isVerifiedDirectInsertion: false
+      ),
+      "an old prefill equal to the result cannot pass after an unrelated paste event"
+    )
+    practice.clear()
+    let deliveredAttempt = UUID()
+    practice.beginAttempt(deliveredAttempt, initialText: "")
+    practice.notePasteRequest()
+    check(
+      practice.verifyDirectReadback(
+        "direct result",
+        expectedText: "direct result",
+        attemptID: deliveredAttempt,
+        isVerifiedDirectInsertion: false
+      ),
+      "a current-attempt paste and changed exact readback prove an unverified direct delivery"
+    )
+    practice.clear()
+    let verifiedAttempt = UUID()
+    practice.beginAttempt(verifiedAttempt, initialText: "verified result")
+    check(
+      practice.verifyDirectReadback(
+        "verified result",
+        expectedText: "verified result",
+        attemptID: verifiedAttempt,
+        isVerifiedDirectInsertion: true
+      ),
+      "a verified direct receipt and exact native control readback complete practice"
     )
 
     print("onboarding state harness passed")

@@ -22,6 +22,9 @@ bash "$ROOT/scripts/build.sh"
 echo "== coordinator harness"
 bash "$ROOT/tests/integration/run_coordinator_harness.sh"
 
+echo "== hotkey configuration harness"
+bash "$ROOT/tests/integration/run_hotkey_configuration_harness.sh"
+
 echo "== text inserter harness"
 bash "$ROOT/tests/integration/run_text_inserter_harness.sh"
 
@@ -34,8 +37,14 @@ bash "$ROOT/tests/integration/run_chunk_decoder_harness.sh"
 echo "== history store harness"
 bash "$ROOT/tests/integration/run_history_store_harness.sh"
 
+echo "== history failure state harness"
+bash "$ROOT/tests/integration/run_history_failure_state_harness.sh"
+
 echo "== input device selection harness"
 bash "$ROOT/tests/integration/run_input_device_selection_harness.sh"
+
+echo "== queued audio operation lease harness"
+bash "$ROOT/tests/integration/run_queued_audio_operation_lease_harness.sh"
 
 echo "== onboarding and pause state harness"
 bash "$ROOT/tests/integration/run_onboarding_state_harness.sh"

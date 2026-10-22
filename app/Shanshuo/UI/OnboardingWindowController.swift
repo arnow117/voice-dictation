@@ -2,7 +2,9 @@ import AppKit
 import Foundation
 import ShanshuoCore
 
-final class OnboardingWindowController: NSWindowController, NSWindowDelegate, NSTextViewDelegate {
+final class OnboardingWindowController: NSWindowController, NSWindowDelegate, NSMenuDelegate,
+  NSTextViewDelegate
+{
   private static let practiceTextAccessibilityIdentifier = "shanshuo-onboarding-practice"
   private let model: AppModel
   private let openAccessibilitySettings: () -> Void
@@ -29,7 +31,10 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate, NS
   private var inputDeviceRow: NSStackView?
   private var shortcutRow: NSStackView?
   private var automaticAccessibilityAdvancePending = false
+  private var practiceGeneration: UInt64 = 0
   private let microphoneTestStartGate: DeferredActionGate
+  private var inputDeviceMenuIsTracking = false
+  private var renderedInputDevices: [InputDevice] = []
 
   init(
     model: AppModel,
@@ -129,6 +134,7 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate, NS
 
     inputDevicePopup.target = self
     inputDevicePopup.action = #selector(inputDeviceChanged)
+    inputDevicePopup.menu?.delegate = self
     inputDevicePopup.setAccessibilityLabel("本次和后续语音输入使用的麦克风")
     let inputDeviceRow = NSStackView(views: [
       NSTextField(labelWithString: "输入设备："),
@@ -217,7 +223,9 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate, NS
     levelIndicator.isHidden = currentStep != .microphoneTest
     inputDeviceRow?.isHidden = currentStep != .microphoneTest
     shortcutRow?.isHidden = currentStep != .shortcut
-    keyboardSettingsButton.isHidden = currentStep != .shortcut || snapshot.isShortcutAvailable
+    let isTestingFn = snapshot.effectiveShortcut == .function && !model.shortcutTestSucceeded
+    keyboardSettingsButton.isHidden =
+      currentStep != .shortcut || (snapshot.isShortcutAvailable && !isTestingFn)
     practiceTextView.enclosingScrollView?.isHidden = currentStep != .practice
     let canContinueModelDownload = currentStep == .model && !snapshot.modelReady
     skipButton.isHidden =
@@ -572,20 +580,32 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate, NS
     }
     switch outcome.delivery {
     case .inserted, .unverified:
-      verifyDirectPracticeReadback(expectedText: outcome.finalText)
+      verifyDirectPracticeReadback(
+        expectedText: outcome.finalText,
+        attemptID: binding.attemptID,
+        delivery: outcome.delivery
+      )
     case .copied:
-      practiceState.expectCopiedText(outcome.finalText)
+      practiceState.expectCopiedText(outcome.finalText, attemptID: binding.attemptID)
       statusLabel.stringValue = "已复制本次结果。请在下面按 ⌘V 粘贴这次结果完成练习。"
     }
   }
 
-  private func verifyDirectPracticeReadback(expectedText: String) {
+  private func verifyDirectPracticeReadback(
+    expectedText: String,
+    attemptID: UUID,
+    delivery: SessionOutcome.Delivery
+  ) {
+    let expectedGeneration = practiceGeneration
     DispatchQueue.main.async { [weak self] in
       guard let self,
         self.currentStep == .practice,
+        self.practiceGeneration == expectedGeneration,
         self.practiceState.verifyDirectReadback(
           self.practiceTextView.string,
-          expectedText: expectedText
+          expectedText: expectedText,
+          attemptID: attemptID,
+          isVerifiedDirectInsertion: delivery == .inserted
         )
       else {
         return
@@ -604,6 +624,8 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate, NS
   }
 
   private func clearTransientPracticeState() {
+    practiceGeneration &+= 1
+    model.cancelOnboardingPracticeSession()
     practiceState.clear()
     practiceTextView.string = ""
   }
@@ -635,6 +657,7 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate, NS
     guard binding.matches(pressTarget) else {
       return nil
     }
+    practiceState.beginAttempt(binding.attemptID, initialText: practiceTextView.string)
     return binding
   }
 
@@ -662,28 +685,68 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate, NS
 
   private func populateInputDevices() {
     let selectedUID = model.selectedInputDeviceUID()
-    inputDevicePopup.removeAllItems()
-    inputDevicePopup.addItem(withTitle: "跟随系统默认")
-    inputDevicePopup.lastItem?.representedObject = nil
-    for device in model.inputDevices() {
-      inputDevicePopup.addItem(withTitle: device.name)
-      inputDevicePopup.lastItem?.representedObject = device.uid
+    let devices = model.inputDevices()
+
+    if devices != renderedInputDevices {
+      guard !inputDeviceMenuIsTracking else {
+        return
+      }
+      inputDevicePopup.removeAllItems()
+      inputDevicePopup.addItem(withTitle: "跟随系统默认")
+      inputDevicePopup.lastItem?.representedObject = nil
+      for device in devices {
+        inputDevicePopup.addItem(withTitle: device.name)
+        inputDevicePopup.lastItem?.representedObject = device.uid
+      }
+      renderedInputDevices = devices
+    }
+
+    guard !inputDeviceMenuIsTracking else {
+      return
     }
     guard let selectedUID else {
-      inputDevicePopup.selectItem(at: 0)
+      if inputDevicePopup.indexOfSelectedItem != 0 {
+        inputDevicePopup.selectItem(at: 0)
+      }
       return
     }
     if let selectedItem = inputDevicePopup.itemArray.first(where: {
       ($0.representedObject as? String) == selectedUID
     }) {
-      inputDevicePopup.select(selectedItem)
+      if inputDevicePopup.selectedItem !== selectedItem {
+        inputDevicePopup.select(selectedItem)
+      }
     } else {
-      inputDevicePopup.selectItem(at: 0)
+      if inputDevicePopup.indexOfSelectedItem != 0 {
+        inputDevicePopup.selectItem(at: 0)
+      }
       statusLabel.stringValue = "上次选择的输入设备不可用；请重新选择或跟随系统默认。"
     }
   }
 
+  func menuWillOpen(_ menu: NSMenu) {
+    if menu == inputDevicePopup.menu {
+      inputDeviceMenuIsTracking = true
+    }
+  }
+
+  func menuDidClose(_ menu: NSMenu) {
+    guard menu == inputDevicePopup.menu else {
+      return
+    }
+    inputDeviceMenuIsTracking = false
+    populateInputDevices()
+  }
+
   private func selectShortcut(_ shortcut: HoldShortcut) {
+    if shortcutPopup.itemArray.contains(where: {
+      ($0.representedObject as? String) == shortcut.storageValue
+    }) {
+      shortcutPopup.selectItem(withTitle: shortcutName(shortcut))
+      return
+    }
+    shortcutPopup.addItem(withTitle: shortcutName(shortcut))
+    shortcutPopup.lastItem?.representedObject = shortcut.storageValue
     shortcutPopup.selectItem(withTitle: shortcutName(shortcut))
   }
 
@@ -714,6 +777,9 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate, NS
     }
     if shortcutTestStarted && model.shortcutTestSucceeded {
       return "已检测到真实按下和松开。"
+    }
+    if snapshot.effectiveShortcut == .function {
+      return "当前有效快捷键：Fn。无法自动确认系统是否占用 Fn；请完成一次实际按住/松开测试，必要时打开键盘设置。"
     }
     return "当前有效快捷键：\(shortcutName(snapshot.effectiveShortcut))。"
   }
@@ -747,44 +813,11 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate, NS
   }
 
   private func shortcutName(_ shortcut: HoldShortcut) -> String {
-    switch shortcut {
-    case .function:
-      return "Fn"
-    case .rightOption:
-      return "右 Option"
-    case .copyOnlyControlShiftSpace:
-      return "⌃⇧ Space（仅复制）"
-    }
+    shortcut.displayName
   }
 
   private func stepPosition(_ step: OnboardingStep) -> Int {
     (OnboardingStep.allCases.firstIndex(of: step) ?? 0) + 1
-  }
-}
-
-extension HoldShortcut {
-  fileprivate var storageValue: String {
-    switch self {
-    case .function:
-      return "function"
-    case .rightOption:
-      return "rightOption"
-    case .copyOnlyControlShiftSpace:
-      return "copyOnlyControlShiftSpace"
-    }
-  }
-
-  fileprivate init?(storageValue: String) {
-    switch storageValue {
-    case "function":
-      self = .function
-    case "rightOption":
-      self = .rightOption
-    case "copyOnlyControlShiftSpace":
-      self = .copyOnlyControlShiftSpace
-    default:
-      return nil
-    }
   }
 }
 

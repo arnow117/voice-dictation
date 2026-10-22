@@ -146,14 +146,18 @@ private final class FakeTextInserter: TextInserting {
 }
 
 private final class FakeHotkeys: HotkeyMonitoring {
-  let isShortcutAvailable = true
+  var isShortcutAvailable = true
   var onHold: ((HoldShortcut, Bool) -> Void)?
   var onCancel: (() -> Void)?
   var onOtherKey: (() -> Void)?
   var selectedShortcut: HoldShortcut = .function
+  private(set) var triggeringSuspensionStates: [Bool] = []
 
   func refresh(accessibilityAuthorized: Bool) {}
   func setCancellationInterception(_ enabled: Bool) {}
+  func setTriggeringSuspended(_ suspended: Bool) {
+    triggeringSuspensionStates.append(suspended)
+  }
   func stop() {}
 }
 
@@ -240,6 +244,14 @@ enum NativeWindowConstructionHarness {
       ),
       HistoryWindowController(model: appModel),
       PrivacyWindowController(model: appModel),
+      SettingsWindowController(
+        model: appModel,
+        openAccessibilitySettings: {},
+        openKeyboardSettings: {},
+        openModelManagement: {},
+        openHistory: {},
+        openPrivacy: {}
+      ),
     ]
 
     for controller in controllers {

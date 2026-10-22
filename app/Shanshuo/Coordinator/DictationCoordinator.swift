@@ -19,6 +19,12 @@ protocol CoordinatorTimerScheduling {
 /// as practice, and keeps practice text out of the persisted history boundary.
 struct PracticeSessionBinding: Equatable {
   let target: TargetSnapshot
+  let attemptID: UUID
+
+  init(target: TargetSnapshot, attemptID: UUID = UUID()) {
+    self.target = target
+    self.attemptID = attemptID
+  }
 
   func matches(_ candidate: TargetSnapshot) -> Bool {
     guard target.bundleIdentifier == candidate.bundleIdentifier,
@@ -112,6 +118,11 @@ final class MainRunLoopTimerScheduler: CoordinatorTimerScheduling {
 /// recognition, and insertion results harmless after cancellation, sleep, permission revocation, or
 /// a new session.
 final class DictationCoordinator {
+  private enum SessionInsertionMode {
+    case directInsertion
+    case copyOnly
+  }
+
   private struct ActiveSession {
     let id: UUID
     let generation: SessionGeneration
@@ -119,6 +130,7 @@ final class DictationCoordinator {
     let pressTarget: SystemFocusSnapshot
     var releaseTarget: SystemFocusSnapshot?
     let shortcut: HoldShortcut
+    let insertionMode: SessionInsertionMode
     let purpose: SessionPurpose
   }
 
@@ -146,6 +158,11 @@ final class DictationCoordinator {
   private var audioOperation: AudioCaptureOperation?
   private var retainedReceipt: RetainedReceipt?
   private var microphoneTestOperation: AudioCaptureOperation?
+  private var microphoneTestStoppingOperation: AudioCaptureOperation?
+  private var microphoneTestGeneration: UInt64 = 0
+  private var microphoneTestStoppingGeneration: UInt64?
+  private var microphoneTestStoppingCompletion: ((MicrophoneTestCompletion) -> Void)?
+  private var microphoneTestStoppingResult: MicrophoneTestCompletion?
   private var microphoneTestTimer: CoordinatorTimer?
   private var microphoneTestHasSound = false
   private var microphoneTestLevelHandler: ((Float) -> Void)?
@@ -197,7 +214,7 @@ final class DictationCoordinator {
   }
 
   var isMicrophoneTestActive: Bool {
-    microphoneTestOperation != nil
+    microphoneTestOperation != nil || microphoneTestStoppingOperation != nil
   }
 
   /// Starts a bounded, memory-only microphone level check. The caller must first make its test
@@ -213,6 +230,7 @@ final class DictationCoordinator {
     guard indicatorVisible,
       phase == .idle,
       microphoneTestOperation == nil,
+      microphoneTestStoppingOperation == nil,
       !isPaused,
       permissions.microphonePermission.isAuthorized,
       audioCapture.isAvailable,
@@ -223,6 +241,7 @@ final class DictationCoordinator {
     }
 
     microphoneTestHasSound = false
+    microphoneTestGeneration &+= 1
     microphoneTestLevelHandler = onLevel
     microphoneTestCompletion = completion
     let operation = audioCapture.start(
@@ -285,10 +304,10 @@ final class DictationCoordinator {
       cancel(message: "麦克风不可用，本次内容已丢弃")
       return
     }
-    // Ctrl-Shift-Space deliberately supports the no-Accessibility copy-only path. A session that
-    // began with a direct-insertion shortcut, however, must discard as soon as that permission is
-    // revoked so it cannot continue with stale accessibility state.
-    if activeSession.shortcut != .copyOnlyControlShiftSpace,
+    // The delivery mode is captured at press time. A user may choose a custom Ctrl-Shift-Space
+    // shortcut while Accessibility is authorized; that session still needs to discard if AX is
+    // later revoked. The shortcut's legacy name is not a permission boundary.
+    if activeSession.insertionMode == .directInsertion,
       !permissions.accessibilityPermission.isAuthorized
     {
       cancel(message: "权限已撤销，本次内容已丢弃")
@@ -309,6 +328,24 @@ final class DictationCoordinator {
   func cancelFromHotkey() {
     requireMainThread()
     cancel(message: "已取消")
+  }
+
+  /// Rebinding a held trigger must first invalidate the session which may otherwise wait forever
+  /// for the key-up of the previous binding.
+  func cancelForHotkeyRebind() {
+    requireMainThread()
+    cancel(message: "快捷键已更改，本次内容已丢弃")
+  }
+
+  /// Leaving setup only cancels a session that has explicitly claimed the practice control.
+  func cancelOnboardingPracticeSession() {
+    requireMainThread()
+    guard let activeSession,
+      case .onboardingPractice = activeSession.purpose
+    else {
+      return
+    }
+    cancel(message: "练习已结束，本次内容已丢弃")
   }
 
   func cancelForOtherKey() {
@@ -371,6 +408,8 @@ final class DictationCoordinator {
       pressTarget: pressTarget,
       releaseTarget: nil,
       shortcut: shortcut,
+      insertionMode: permissions.accessibilityPermission.isAuthorized
+        ? .directInsertion : .copyOnly,
       purpose: claimedPurpose(for: pressTarget.target)
     )
     activeSession = session
@@ -601,7 +640,7 @@ final class DictationCoordinator {
     guard let session = activeSession else {
       return
     }
-    let wasCopyOnlySession = session.shortcut == .copyOnlyControlShiftSpace
+    let wasCopyOnlySession = session.insertionMode == .copyOnly
     pendingInsertion = nil
     cancelIfSecureInputActive()
     guard activeSession?.generation == completionGeneration, phase == .inserting else {
@@ -722,7 +761,7 @@ final class DictationCoordinator {
   }
 
   private func cancel(message: String) {
-    if microphoneTestOperation != nil {
+    if isMicrophoneTestActive {
       finishMicrophoneTest(cancelled: true)
     }
     guard phase != .idle else {
@@ -860,28 +899,62 @@ final class DictationCoordinator {
     completion forcedCompletion: MicrophoneTestCompletion? = nil
   ) {
     requireMainThread()
-    guard let operation = microphoneTestOperation else {
+    if let stoppingOperation = microphoneTestStoppingOperation {
+      if cancelled {
+        stoppingOperation.cancel()
+        microphoneTestStoppingResult = forcedCompletion ?? .cancelled
+      }
       return
     }
+    guard let operation = microphoneTestOperation,
+      microphoneTestStoppingOperation == nil
+    else {
+      return
+    }
+    let generation = microphoneTestGeneration
     microphoneTestOperation = nil
+    microphoneTestStoppingOperation = operation
+    microphoneTestStoppingGeneration = generation
     microphoneTestTimer?.cancel()
     microphoneTestTimer = nil
     let completed = microphoneTestCompletion
     microphoneTestCompletion = nil
     microphoneTestLevelHandler = nil
 
+    let detectedSound = microphoneTestHasSound
     if cancelled {
       operation.cancel()
-      completed?(forcedCompletion ?? .cancelled)
+    }
+    microphoneTestStoppingCompletion = completed
+    microphoneTestStoppingResult =
+      cancelled
+      ? forcedCompletion ?? .cancelled
+      : detectedSound ? .detectedSound : .noSound
+    audioCapture.stop(operation) { audio in
+      self.completeMicrophoneTestStop(operation: operation, generation: generation, audio: audio)
+    }
+  }
+
+  private func completeMicrophoneTestStop(
+    operation: AudioCaptureOperation,
+    generation: UInt64,
+    audio: CapturedAudio
+  ) {
+    requireMainThread()
+    var disposableAudio = audio
+    disposableAudio.erase()
+    guard microphoneTestStoppingOperation === operation,
+      microphoneTestStoppingGeneration == generation
+    else {
       return
     }
-
-    let detectedSound = microphoneTestHasSound
-    audioCapture.stop(operation) { audio in
-      var disposableAudio = audio
-      disposableAudio.erase()
-      completed?(detectedSound ? .detectedSound : .noSound)
-    }
+    let completion = microphoneTestStoppingCompletion
+    let result = microphoneTestStoppingResult ?? .cancelled
+    microphoneTestStoppingOperation = nil
+    microphoneTestStoppingGeneration = nil
+    microphoneTestStoppingCompletion = nil
+    microphoneTestStoppingResult = nil
+    completion?(result)
   }
 
   private func requireMainThread() {

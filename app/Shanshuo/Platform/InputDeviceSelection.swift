@@ -6,6 +6,15 @@ struct InputDevice: Equatable {
   let name: String
 }
 
+/// Only process-private CoreAudio aggregates are hidden from settings. This keeps user-created
+/// aggregates and virtual devices available while avoiding persistence of an app's temporary
+/// default aggregate UID.
+enum InputDeviceVisibility {
+  static func shouldOffer(isPrivateAggregate: Bool) -> Bool {
+    !isPrivateAggregate
+  }
+}
+
 enum InputDeviceResolution: Equatable {
   case systemDefault
   case selected(InputDevice)
@@ -29,6 +38,15 @@ struct InputDeviceSessionPlan: Equatable {
   }
 }
 
+/// The concrete input route selected for one preparation. A follow-default plan deliberately
+/// records the device that was the system default at this point in time; the next operation
+/// resolves the plan again instead of reusing this snapshot blindly.
+struct ResolvedInputDevicePlan: Equatable {
+  let plan: InputDeviceSessionPlan
+  let deviceID: AudioDeviceID
+  let deviceUID: String?
+}
+
 /// Resolves a saved preference only when a new audio operation begins. An active capture keeps the
 /// device it started with; the caller must explicitly handle an engine interruption if that active
 /// device disappears.
@@ -44,7 +62,9 @@ enum InputDeviceSelection {
 protocol InputDeviceConfiguring: AnyObject {
   func availableDevices() -> [InputDevice]
   func deviceID(for uid: String) -> AudioDeviceID?
+  func deviceUID(for deviceID: AudioDeviceID) -> String?
   func defaultInputDeviceID() -> AudioDeviceID?
+  func currentInputDeviceID() -> AudioDeviceID?
   func apply(deviceID: AudioDeviceID) throws
 }
 
@@ -55,23 +75,45 @@ enum InputDeviceSessionConfigurator {
     plan: InputDeviceSessionPlan,
     using adapter: InputDeviceConfiguring
   ) -> Bool {
+    guard let resolved = resolve(plan: plan, using: adapter) else {
+      return false
+    }
+    return apply(resolved.deviceID, using: adapter)
+  }
+
+  /// Resolves a saved preference to a concrete route exactly once for a preparation ticket.
+  /// Callers must retain this value while they wait for AVAudioEngine's configuration event.
+  static func resolve(
+    plan: InputDeviceSessionPlan,
+    using adapter: InputDeviceConfiguring
+  ) -> ResolvedInputDevicePlan? {
+    guard let deviceID = resolvedDeviceID(for: plan, using: adapter) else {
+      return nil
+    }
+    return ResolvedInputDevicePlan(
+      plan: plan,
+      deviceID: deviceID,
+      deviceUID: adapter.deviceUID(for: deviceID)
+    )
+  }
+
+  /// Resolve the exact device the app input unit must use for one immutable session plan. The
+  /// caller may compare this value with the audio unit after a configuration notification settles.
+  static func resolvedDeviceID(
+    for plan: InputDeviceSessionPlan,
+    using adapter: InputDeviceConfiguring
+  ) -> AudioDeviceID? {
     switch plan.resolve(devices: adapter.availableDevices()) {
     case .systemDefault:
-      guard let defaultDeviceID = adapter.defaultInputDeviceID() else {
-        return false
-      }
-      return apply(defaultDeviceID, using: adapter)
+      return adapter.defaultInputDeviceID()
     case .unavailable:
-      return false
+      return nil
     case .selected(let device):
-      guard let deviceID = adapter.deviceID(for: device.uid) else {
-        return false
-      }
-      return apply(deviceID, using: adapter)
+      return adapter.deviceID(for: device.uid)
     }
   }
 
-  private static func apply(_ deviceID: AudioDeviceID, using adapter: InputDeviceConfiguring)
+  static func apply(_ deviceID: AudioDeviceID, using adapter: InputDeviceConfiguring)
     -> Bool
   {
     do {
