@@ -74,7 +74,6 @@ final class ModelManagementWindowController: NSWindowController {
     progressIndicator.maxValue = 1
     progressIndicator.controlSize = .regular
     progressIndicator.translatesAutoresizingMaskIntoConstraints = false
-    progressIndicator.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
     progressIndicator.setAccessibilityLabel("模型下载进度")
 
     sourcePopup.removeAllItems()
@@ -117,6 +116,7 @@ final class ModelManagementWindowController: NSWindowController {
     stack.addArrangedSubview(locationLabel)
     stack.addArrangedSubview(sourceRow)
     stack.addArrangedSubview(buttons)
+    progressIndicator.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
 
     modelNameLabel.stringValue = manager.manifest.displayName
     modelDetailLabel.stringValue =

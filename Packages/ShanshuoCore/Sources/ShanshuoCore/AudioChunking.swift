@@ -5,19 +5,23 @@ import Foundation
 public enum AudioChunking {
   public static let maximumChunkDuration = TimeInterval(20)
 
-  /// Avoids asking the generative recognizer to decode an entirely silent chunk. A zero-valued
-  /// test fixture must not become a hallucinated insertion. The threshold is deliberately low so
-  /// ordinary quiet speech is still sent to the model.
-  public static func hasAudibleSignal(_ samples: [Float], minimumRMS: Float = 0.001) -> Bool {
-    guard !samples.isEmpty else {
-      return false
+  /// Avoids invoking the generative recognizer for digital silence while preserving low-level
+  /// speech. This is deliberately not voice activity detection: any finite non-zero sample may
+  /// be meaningful and must reach the model. Non-finite samples are ignored so corrupt input does
+  /// not become a signal or contaminate a later recognizer call.
+  public static func hasNonZeroFiniteSignal(_ samples: [Float]) -> Bool {
+    samples.contains { sample in
+      sample.isFinite && sample != 0
     }
+  }
 
-    let meanSquare =
-      samples.reduce(Float.zero) { partial, sample in
-        partial + sample * sample
-      } / Float(samples.count)
-    return sqrt(meanSquare) >= minimumRMS
+  /// Keeps corrupt numeric values out of the native recognizer without applying amplitude
+  /// thresholding to valid quiet speech. Callers first use `hasNonZeroFiniteSignal` so an all-zero
+  /// or non-finite chunk still avoids recognizer work altogether.
+  public static func sanitizedForRecognition(_ samples: [Float]) -> [Float] {
+    samples.map { sample in
+      sample.isFinite ? sample : 0
+    }
   }
 
   public static func ranges(

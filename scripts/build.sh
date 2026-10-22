@@ -66,7 +66,7 @@ swiftc -O -swift-version 5 -target $TARGET -module-cache-path "$OUT/.mc" -module
   -import-objc-header "$ROOT/app/Shanshuo/ASR/Bridging.h" -Xcc -I"$VENDOR/include" \
   -L "$VENDOR/lib" -lsherpa-onnx-c-api -lsherpa-onnx-core -lkaldi-decoder-core -lsherpa-onnx-kaldifst-core \
   -lsherpa-onnx-fstfar -lsherpa-onnx-fst -lkaldi-native-fbank-core -lkissfft-float -lssentencepiece_core \
-  -lonnxruntime -lc++ \
+  -lonnxruntime -lsqlite3 -lc++ \
   -framework AppKit -framework Carbon -framework ApplicationServices -framework AVFoundation \
   -framework Accelerate -framework CoreML -framework CryptoKit -framework Foundation \
   "${SRCS[@]}" -o "$STAGE/Contents/MacOS/Shanshuo"

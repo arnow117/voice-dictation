@@ -1,4 +1,6 @@
 import AVFoundation
+import AudioToolbox
+import CoreAudio
 import Foundation
 import ShanshuoCore
 
@@ -28,6 +30,8 @@ protocol AudioCapturing: AnyObject {
   /// A lock-protected cache. AVAudioEngine is never queried from the caller's thread.
   var isAvailable: Bool { get }
   var onInterruption: ((AudioCaptureOperation) -> Void)? { get set }
+  var availableInputDevices: [InputDevice] { get }
+  var selectedInputDeviceUID: String? { get set }
   func prepare()
   @discardableResult
   func start(
@@ -46,7 +50,8 @@ final class MemoryAudioCapture: AudioCapturing {
   static let sampleRate = 16_000
   private static let maximumSamples = Int(DictationRules.maximumRecording) * sampleRate
 
-  private let engine = AVAudioEngine()
+  private let engine: AVAudioEngine
+  private let inputDeviceConfigurator: InputDeviceConfiguring
   private let engineQueue = DispatchQueue(
     label: "com.arnow117.shanshuo.audio-engine",
     qos: .userInitiated
@@ -62,6 +67,7 @@ final class MemoryAudioCapture: AudioCapturing {
   private var cachedAvailability = false
   private var tapIsInstalled = false
   private var engineEventObservation: AudioEngineEventObservation?
+  private var requestedInputDeviceUID: String?
 
   var onInterruption: ((AudioCaptureOperation) -> Void)? {
     get {
@@ -77,7 +83,14 @@ final class MemoryAudioCapture: AudioCapturing {
   }
   private var interruptionHandler: ((AudioCaptureOperation) -> Void)?
 
-  init(engineEvents: AudioEngineEventObserving = SystemAudioEngineEventSource()) {
+  init(
+    engine: AVAudioEngine = AVAudioEngine(),
+    engineEvents: AudioEngineEventObserving = SystemAudioEngineEventSource(),
+    inputDeviceConfigurator: InputDeviceConfiguring? = nil
+  ) {
+    self.engine = engine
+    self.inputDeviceConfigurator =
+      inputDeviceConfigurator ?? EngineInputDeviceConfigurator(inputNode: engine.inputNode)
     engineEventObservation = engineEvents.observe(engine: engine) { [weak self] in
       self?.handleEngineConfigurationChange()
     }
@@ -91,6 +104,23 @@ final class MemoryAudioCapture: AudioCapturing {
     stateLock.lock()
     defer { stateLock.unlock() }
     return cachedAvailability
+  }
+
+  var availableInputDevices: [InputDevice] {
+    inputDeviceConfigurator.availableDevices()
+  }
+
+  var selectedInputDeviceUID: String? {
+    get {
+      stateLock.lock()
+      defer { stateLock.unlock() }
+      return requestedInputDeviceUID
+    }
+    set {
+      stateLock.lock()
+      requestedInputDeviceUID = newValue
+      stateLock.unlock()
+    }
   }
 
   func prepare() {
@@ -140,7 +170,12 @@ final class MemoryAudioCapture: AudioCapturing {
     stateLock.lock()
     nextOperationIdentifier &+= 1
     let identifier = nextOperationIdentifier
-    let operation = MemoryAudioCaptureOperation(identifier: identifier, capture: self)
+    let inputDevicePlan = InputDeviceSessionPlan(preferredUID: requestedInputDeviceUID)
+    let operation = MemoryAudioCaptureOperation(
+      identifier: identifier,
+      inputDevicePlan: inputDevicePlan,
+      capture: self
+    )
     activeOperationIdentifier = identifier
     activeOperation = operation
     isRunning = false
@@ -161,6 +196,13 @@ final class MemoryAudioCapture: AudioCapturing {
 
     stopEngineOnEngineQueue()
     guard isCurrent(operation) else {
+      return
+    }
+
+    guard configureInputDeviceForNewOperationOnEngineQueue(operation) else {
+      updateAvailabilityOnEngineQueue()
+      completeStart(
+        operation, result: .failure(AudioCaptureError.unavailable), completion: completion)
       return
     }
 
@@ -367,6 +409,18 @@ final class MemoryAudioCapture: AudioCapturing {
     stateLock.unlock()
   }
 
+  /// Input choice is resolved only at the beginning of a new capture. Updating a preference while
+  /// recording never moves an active engine to another microphone; a missing selected UID simply
+  /// makes the next request unavailable until the user chooses another input or follows default.
+  private func configureInputDeviceForNewOperationOnEngineQueue(
+    _ operation: MemoryAudioCaptureOperation
+  ) -> Bool {
+    InputDeviceSessionConfigurator.configure(
+      plan: operation.inputDevicePlan,
+      using: inputDeviceConfigurator
+    )
+  }
+
   private func isCurrent(_ operation: MemoryAudioCaptureOperation) -> Bool {
     stateLock.lock()
     defer { stateLock.unlock() }
@@ -410,12 +464,161 @@ final class MemoryAudioCapture: AudioCapturing {
   }
 }
 
+/// The production adapter changes only this process's AVAudioEngine input unit. It resolves the
+/// system default per operation, so the next recording follows an OS default change without moving
+/// an active capture or changing the OS default itself.
+private final class EngineInputDeviceConfigurator: InputDeviceConfiguring {
+  private let inputNode: AVAudioInputNode
+
+  init(inputNode: AVAudioInputNode) {
+    self.inputNode = inputNode
+  }
+
+  func availableDevices() -> [InputDevice] {
+    SystemInputDevices.available()
+  }
+
+  func deviceID(for uid: String) -> AudioDeviceID? {
+    SystemInputDevices.deviceID(for: uid)
+  }
+
+  func defaultInputDeviceID() -> AudioDeviceID? {
+    SystemInputDevices.defaultInputDeviceID()
+  }
+
+  func apply(deviceID: AudioDeviceID) throws {
+    try inputNode.auAudioUnit.setDeviceID(deviceID)
+  }
+}
+
+private enum SystemInputDevices {
+  static func available() -> [InputDevice] {
+    allDeviceIDs().compactMap { deviceID in
+      guard hasInputStreams(deviceID),
+        let uid = stringProperty(deviceID, selector: kAudioDevicePropertyDeviceUID),
+        let name = stringProperty(deviceID, selector: kAudioObjectPropertyName)
+      else {
+        return nil
+      }
+      return InputDevice(uid: uid, name: name)
+    }
+    .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+  }
+
+  static func deviceID(for uid: String) -> AudioDeviceID? {
+    allDeviceIDs().first { deviceID in
+      stringProperty(deviceID, selector: kAudioDevicePropertyDeviceUID) == uid
+        && hasInputStreams(deviceID)
+    }
+  }
+
+  static func defaultInputDeviceID() -> AudioDeviceID? {
+    var address = AudioObjectPropertyAddress(
+      mSelector: kAudioHardwarePropertyDefaultInputDevice,
+      mScope: kAudioObjectPropertyScopeGlobal,
+      mElement: kAudioObjectPropertyElementMain
+    )
+    var defaultDeviceID = AudioDeviceID(kAudioObjectUnknown)
+    var byteCount = UInt32(MemoryLayout<AudioDeviceID>.size)
+    let result = AudioObjectGetPropertyData(
+      AudioObjectID(kAudioObjectSystemObject),
+      &address,
+      0,
+      nil,
+      &byteCount,
+      &defaultDeviceID
+    )
+    guard result == noErr, defaultDeviceID != AudioDeviceID(kAudioObjectUnknown) else {
+      return nil
+    }
+    return defaultDeviceID
+  }
+
+  private static func allDeviceIDs() -> [AudioDeviceID] {
+    var address = AudioObjectPropertyAddress(
+      mSelector: kAudioHardwarePropertyDevices,
+      mScope: kAudioObjectPropertyScopeGlobal,
+      mElement: kAudioObjectPropertyElementMain
+    )
+    var byteCount: UInt32 = 0
+    guard
+      AudioObjectGetPropertyDataSize(
+        AudioObjectID(kAudioObjectSystemObject),
+        &address,
+        0,
+        nil,
+        &byteCount
+      ) == noErr
+    else {
+      return []
+    }
+    let count = Int(byteCount) / MemoryLayout<AudioDeviceID>.size
+    var devices = Array(repeating: AudioDeviceID(), count: count)
+    guard
+      AudioObjectGetPropertyData(
+        AudioObjectID(kAudioObjectSystemObject),
+        &address,
+        0,
+        nil,
+        &byteCount,
+        &devices
+      ) == noErr
+    else {
+      return []
+    }
+    return devices
+  }
+
+  private static func hasInputStreams(_ deviceID: AudioDeviceID) -> Bool {
+    var address = AudioObjectPropertyAddress(
+      mSelector: kAudioDevicePropertyStreamConfiguration,
+      mScope: kAudioDevicePropertyScopeInput,
+      mElement: kAudioObjectPropertyElementMain
+    )
+    var byteCount: UInt32 = 0
+    guard AudioObjectGetPropertyDataSize(deviceID, &address, 0, nil, &byteCount) == noErr,
+      byteCount >= MemoryLayout<AudioBufferList>.size
+    else {
+      return false
+    }
+    let storage = UnsafeMutableRawPointer.allocate(
+      byteCount: Int(byteCount), alignment: MemoryLayout<AudioBufferList>.alignment)
+    defer { storage.deallocate() }
+    guard AudioObjectGetPropertyData(deviceID, &address, 0, nil, &byteCount, storage) == noErr
+    else {
+      return false
+    }
+    let buffers = storage.assumingMemoryBound(to: AudioBufferList.self)
+    return buffers.pointee.mNumberBuffers > 0
+  }
+
+  private static func stringProperty(
+    _ deviceID: AudioDeviceID, selector: AudioObjectPropertySelector
+  )
+    -> String?
+  {
+    var address = AudioObjectPropertyAddress(
+      mSelector: selector,
+      mScope: kAudioObjectPropertyScopeGlobal,
+      mElement: kAudioObjectPropertyElementMain
+    )
+    var value: Unmanaged<CFString>?
+    var byteCount = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+    guard AudioObjectGetPropertyData(deviceID, &address, 0, nil, &byteCount, &value) == noErr else {
+      return nil
+    }
+    return value?.takeUnretainedValue() as String?
+  }
+}
+
 private final class MemoryAudioCaptureOperation: AudioCaptureOperation {
   let identifier: UInt64
+  let inputDevicePlan: InputDeviceSessionPlan
   private weak var capture: MemoryAudioCapture?
 
-  init(identifier: UInt64, capture: MemoryAudioCapture) {
+  init(identifier: UInt64, inputDevicePlan: InputDeviceSessionPlan, capture: MemoryAudioCapture) {
     self.identifier = identifier
+    self.inputDevicePlan = inputDevicePlan
     self.capture = capture
   }
 

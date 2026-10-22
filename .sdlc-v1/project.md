@@ -25,7 +25,7 @@
 |---|---|---|
 | 运行时 | Swift 6.3.3 工具链，macOS 14+，仅 arm64；ShanshuoCore 用 Swift 6 语言模式，应用用 Swift 5 语言模式 | `scripts/build.sh`；2026-10-22 `xcrun swift --version` |
 | 框架 | AppKit、Carbon（RegisterEventHotKey）、ApplicationServices（AX、CGEventTap）、AVFoundation；sherpa-onnx v1.13.8 C API 静态库（含 onnxruntime） | `scripts/build.sh`、`Vendor/sherpa-onnx/README.md` |
-| 存储 | 本地文件：模型在 `~/Library/Application Support/Shanshuo/Models/`（开发构建读主 checkout `.work/models/`）；历史与设置为本地文件（T013/T014 实现） | `app/Shanshuo/App/Paths.swift` |
+| 存储 | 模型在 `~/Library/Application Support/Shanshuo/Models/`（开发构建读主 checkout `.work/models/`）；历史由串行系统 SQLite3 存储，设置和引导进度使用应用 UserDefaults | `app/Shanshuo/App/Paths.swift`、`app/Shanshuo/History/HistoryStore.swift` |
 | 外部系统 | 模型下载源 Hugging Face / hf-mirror（T012）；固定 revision 的 Qwen3-ASR 转换包，无 ModelScope 源；首个测试版无其他产品网络调用 | FEAT-001 ED-009 |
 
 ## 入口与配置
@@ -59,7 +59,7 @@ commands:
 | 模型与测试身份 | Qwen3-ASR-0.6B int8（`sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25`，SHA-256 见 `spikes/model-download/models.json`）；无云端凭据。 |
 | 运行产物 | `.work/build/`、`.work/spm/`（gitignore）；评测结果 `bench/asr/results/`、报告 `bench/asr/reports/`（入库）。 |
 | CI | none |
-| 准备缺口 | 2026-10-21 Manus 环境观察到能效核限制及 `open --args` 参数问题；这些是历史环境证据，不能推定当前 Codex 进程也受相同限制。T015 需实际记录最终应用的调度与端到端计时。当前原生界面工具首次连接菜单栏应用发生长时间超时，尚无正式版真实麦克风/权限 PASS；8 个本机应用与 4 个缺失应用的范围见 REQ-001 DEC-023。 |
+| 准备缺口 | 2026-10-21 Manus 环境观察到能效核限制及 `open --args` 参数问题；这些是历史环境证据，不能推定当前 Codex 进程也受相同限制。2026-10-22 原生启动日志定位布局约束异常；修正层级顺序后，构建 `20261022-130455` 已通过 CUA 打开欢迎窗口并进入麦克风步骤。真实权限、麦克风、调度与端到端计时仍需验证；8 个本机应用与 4 个缺失应用的范围见 REQ-001 DEC-023。 |
 
 ## 变更面映射
 

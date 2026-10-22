@@ -55,6 +55,8 @@ protocol AudioCaptureOperation: AnyObject {
 protocol AudioCapturing: AnyObject {
   var isAvailable: Bool { get }
   var onInterruption: ((AudioCaptureOperation) -> Void)? { get set }
+  var availableInputDevices: [InputDevice] { get }
+  var selectedInputDeviceUID: String? { get set }
   func prepare()
   @discardableResult
   func start(
@@ -62,6 +64,11 @@ protocol AudioCapturing: AnyObject {
     completion: @escaping (AudioCaptureOperation, Result<Void, Error>) -> Void
   ) -> AudioCaptureOperation
   func stop(_ operation: AudioCaptureOperation, completion: @escaping (CapturedAudio) -> Void)
+}
+
+struct InputDevice: Equatable {
+  let uid: String
+  let name: String
 }
 
 protocol ASRRecognizing: AnyObject {
@@ -179,10 +186,13 @@ private final class FakeAudioOperation: AudioCaptureOperation {
 private final class FakeAudio: AudioCapturing {
   var isAvailable = true
   var onInterruption: ((AudioCaptureOperation) -> Void)?
+  var availableInputDevices: [InputDevice] = [InputDevice(uid: "default", name: "Default")]
+  var selectedInputDeviceUID: String?
   var calls: [String] = []
   private(set) var wasCalledOffMainThread = false
   private(set) var cancellationCount = 0
   private var startCompletion: ((AudioCaptureOperation, Result<Void, Error>) -> Void)?
+  private var levelHandler: ((Float) -> Void)?
   private(set) var latestOperation: FakeAudioOperation?
 
   func prepare() {
@@ -200,7 +210,12 @@ private final class FakeAudio: AudioCapturing {
     }
     latestOperation = operation
     startCompletion = completion
+    levelHandler = onLevel
     return operation
+  }
+
+  func emitLevel(_ level: Float) {
+    levelHandler?(level)
   }
 
   /// Simulates an engine start returning after the main thread has processed a release or Esc.
@@ -369,6 +384,35 @@ private final class ReceiptEndObserver {
   }
 }
 
+private final class OutcomeObserver {
+  private(set) var outcomes: [SessionOutcome] = []
+
+  func record(_ outcome: SessionOutcome) {
+    outcomes.append(outcome)
+  }
+}
+
+/// Models the native onboarding window's per-press first-responder check. It deliberately does
+/// not remember that an earlier attempt was practice: every call must still see the exact control.
+private final class FakeLivePracticeControl {
+  let target: TargetSnapshot
+  var isExactFirstResponder = true
+  private(set) var bindingRequests = 0
+
+  init(target: TargetSnapshot) {
+    self.target = target
+  }
+
+  func binding(for pressTarget: TargetSnapshot) -> PracticeSessionBinding? {
+    bindingRequests += 1
+    guard isExactFirstResponder else {
+      return nil
+    }
+    let binding = PracticeSessionBinding(target: target)
+    return binding.matches(pressTarget) ? binding : nil
+  }
+}
+
 private final class ManualClock: DictationClock {
   var date = Date(timeIntervalSinceReferenceDate: 1_000_000)
 
@@ -422,6 +466,12 @@ private final class ManualTimerScheduler: CoordinatorTimerScheduling {
       timer.fire()
     }
   }
+
+  func fireAllTimers() {
+    for timer in timers {
+      timer.fire()
+    }
+  }
 }
 
 private struct Harness {
@@ -435,6 +485,7 @@ private struct Harness {
   let clock: ManualClock
   let timers: ManualTimerScheduler
   let receiptEndObserver: ReceiptEndObserver
+  let outcomeObserver: OutcomeObserver
   let coordinator: DictationCoordinator
 
   init() {
@@ -455,6 +506,7 @@ private struct Harness {
     inserter = FakeInserter(clock: clock)
     timers = ManualTimerScheduler()
     receiptEndObserver = ReceiptEndObserver()
+    outcomeObserver = OutcomeObserver()
     coordinator = DictationCoordinator(
       permissions: permissions,
       focusInspector: focus,
@@ -465,7 +517,8 @@ private struct Harness {
       hotkeys: hotkeys,
       clock: clock,
       timerScheduler: timers,
-      onReceiptEnded: receiptEndObserver.record
+      onReceiptEnded: receiptEndObserver.record,
+      onSessionOutcome: outcomeObserver.record
     )
   }
 
@@ -725,6 +778,224 @@ private func testFocusChangeAndNoSpeech() {
   )
 }
 
+private func testOutcomeAndMicrophoneTestBoundaries() {
+  let outcomeHarness = Harness()
+  outcomeHarness.pressAndRelease()
+  outcomeHarness.recognizer.complete(.success("final text"))
+  check(
+    outcomeHarness.outcomeObserver.outcomes.count == 1,
+    "final copied or inserted text emits one outcome")
+  check(
+    outcomeHarness.outcomeObserver.outcomes.first?.delivery == .inserted,
+    "direct insertion outcome reports actual inserted delivery"
+  )
+  check(
+    outcomeHarness.outcomeObserver.outcomes.first?.finalText == "final text",
+    "outcome exposes the final allowed text"
+  )
+
+  let practiceHarness = Harness()
+  let practiceControl = FakeLivePracticeControl(target: practiceHarness.focus.current.target)
+  practiceHarness.coordinator.setOnboardingPracticeBindingProvider { pressTarget in
+    practiceControl.binding(for: pressTarget)
+  }
+  practiceHarness.pressAndRelease()
+  practiceHarness.recognizer.complete(.success("practice text"))
+  guard case .onboardingPractice? = practiceHarness.outcomeObserver.outcomes.first?.purpose else {
+    check(false, "a matching focused practice control tags only its own session")
+    return
+  }
+  check(
+    practiceHarness.outcomeObserver.outcomes.first?.isPersistableInHistory == false,
+    "a verified onboarding practice outcome is excluded from history persistence"
+  )
+
+  let unrelatedHarness = Harness()
+  let unrelatedControl = FakeLivePracticeControl(
+    target: TargetSnapshot(
+      bundleIdentifier: "com.apple.Notes",
+      processIdentifier: 100,
+      elementIdentifier: "other-practice-field",
+      isEditable: true,
+      isSecure: false
+    )
+  )
+  unrelatedHarness.coordinator.setOnboardingPracticeBindingProvider { pressTarget in
+    unrelatedControl.binding(for: pressTarget)
+  }
+  unrelatedHarness.pressAndRelease()
+  unrelatedHarness.recognizer.complete(.success("ordinary text"))
+  check(
+    unrelatedHarness.outcomeObserver.outcomes.first?.purpose == .dictation,
+    "an ordinary app result cannot inherit an unmatched practice purpose"
+  )
+
+  let cancelledHarness = Harness()
+  cancelledHarness.pressAndRelease()
+  cancelledHarness.coordinator.cancelFromHotkey()
+  cancelledHarness.recognizer.complete(.success("must not retain"))
+  check(cancelledHarness.outcomeObserver.outcomes.isEmpty, "cancelled sessions never emit outcomes")
+
+  let testHarness = Harness()
+  var levelValues: [Float] = []
+  var microphoneResult: MicrophoneTestCompletion?
+  let started = testHarness.coordinator.beginMicrophoneTest(
+    indicatorVisible: true,
+    onLevel: { levelValues.append($0) },
+    completion: { microphoneResult = $0 }
+  )
+  check(started, "microphone test starts only through the coordinator")
+  check(
+    testHarness.coordinator.phase == .idle && testHarness.coordinator.isMicrophoneTestActive,
+    "microphone test reserves audio while keeping dictation idle"
+  )
+  testHarness.audio.completePendingStart()
+  testHarness.audio.emitLevel(0.02)
+  testHarness.timers.fireAllTimers()
+  check(microphoneResult == .detectedSound, "microphone test requires a real audio level")
+  check(levelValues == [0.02], "microphone test forwards the observed level only in memory")
+
+  let exclusiveHarness = Harness()
+  _ = exclusiveHarness.coordinator.beginMicrophoneTest(
+    indicatorVisible: true,
+    onLevel: { _ in },
+    completion: { _ in }
+  )
+  exclusiveHarness.coordinator.hotkeyChanged(.function, isPressed: true)
+  check(
+    exclusiveHarness.audio.calls.filter { $0 == "audio.start" }.count == 1,
+    "dictation cannot start while a microphone test owns the capture"
+  )
+  exclusiveHarness.coordinator.cancelForSystemInterruption()
+  check(
+    !exclusiveHarness.coordinator.isMicrophoneTestActive,
+    "system interruption cancels microphone testing")
+
+  let closeHarness = Harness()
+  var closeResult: MicrophoneTestCompletion?
+  _ = closeHarness.coordinator.beginMicrophoneTest(
+    indicatorVisible: true,
+    onLevel: { _ in },
+    completion: { closeResult = $0 }
+  )
+  let pendingTestStart = closeHarness.audio.latestOperation
+  closeHarness.coordinator.endMicrophoneTest()
+  closeHarness.audio.completePendingStart()
+  check(
+    pendingTestStart?.isCancelled == true, "closing microphone test cancels a queued engine start")
+  check(
+    closeResult == .cancelled,
+    "closing microphone test reports cancellation without retaining audio")
+}
+
+private func testPracticeBindingIsLiveForEveryRetry() {
+  func makePracticeHarness() -> (Harness, FakeLivePracticeControl) {
+    let harness = Harness()
+    let control = FakeLivePracticeControl(target: harness.focus.current.target)
+    harness.coordinator.setOnboardingPracticeBindingProvider { pressTarget in
+      control.binding(for: pressTarget)
+    }
+    return (harness, control)
+  }
+
+  func checkPracticeOutcome(_ harness: Harness, _ message: String) {
+    guard case .onboardingPractice? = harness.outcomeObserver.outcomes.last?.purpose else {
+      check(false, message)
+      return
+    }
+    check(
+      harness.outcomeObserver.outcomes.last?.isPersistableInHistory == false,
+      "practice retries remain outside the history boundary"
+    )
+  }
+
+  let shortPressHarness = makePracticeHarness()
+  shortPressHarness.0.pressAndStart()
+  shortPressHarness.0.clock.advance(0.1)
+  shortPressHarness.0.coordinator.hotkeyChanged(.function, isPressed: false)
+  shortPressHarness.0.pressAndRelease()
+  shortPressHarness.0.recognizer.complete(.success("retry after short press"))
+  checkPracticeOutcome(shortPressHarness.0, "short press retry receives a fresh practice purpose")
+  check(
+    shortPressHarness.1.bindingRequests == 2,
+    "short press and retry each perform a live practice check"
+  )
+
+  let escapeHarness = makePracticeHarness()
+  escapeHarness.0.pressAndStart()
+  escapeHarness.0.coordinator.cancelFromHotkey()
+  escapeHarness.0.pressAndRelease()
+  escapeHarness.0.recognizer.complete(.success("retry after escape"))
+  checkPracticeOutcome(escapeHarness.0, "Esc retry receives a fresh practice purpose")
+
+  let silenceHarness = makePracticeHarness()
+  silenceHarness.0.pressAndRelease()
+  silenceHarness.0.recognizer.complete(.success("   。"))
+  check(
+    silenceHarness.0.outcomeObserver.outcomes.isEmpty,
+    "silent practice attempt creates no retainable outcome"
+  )
+  silenceHarness.0.pressAndRelease()
+  silenceHarness.0.recognizer.complete(.success("retry after silence"))
+  checkPracticeOutcome(silenceHarness.0, "silent retry receives a fresh practice purpose")
+
+  let otherControlHarness = makePracticeHarness()
+  otherControlHarness.0.focus.current = SystemFocusSnapshot(
+    target: TargetSnapshot(
+      bundleIdentifier: "com.apple.Notes",
+      processIdentifier: 100,
+      elementIdentifier: "ordinary-control",
+      isEditable: true,
+      isSecure: false
+    )
+  )
+  otherControlHarness.0.pressAndRelease()
+  otherControlHarness.0.recognizer.complete(.success("ordinary control"))
+  check(
+    otherControlHarness.0.outcomeObserver.outcomes.last?.purpose == .dictation,
+    "another control in the same app cannot claim practice"
+  )
+
+  let otherWindowHarness = makePracticeHarness()
+  otherWindowHarness.0.focus.current = SystemFocusSnapshot(
+    target: TargetSnapshot(
+      bundleIdentifier: "com.apple.Notes",
+      processIdentifier: 101,
+      elementIdentifier: "body",
+      isEditable: true,
+      isSecure: false
+    )
+  )
+  otherWindowHarness.0.pressAndRelease()
+  otherWindowHarness.0.recognizer.complete(.success("other window"))
+  check(
+    otherWindowHarness.0.outcomeObserver.outcomes.last?.purpose == .dictation,
+    "another window cannot claim practice"
+  )
+
+  let copyOnlyHarness = makePracticeHarness()
+  copyOnlyHarness.0.permissions.accessibilityPermission = .denied
+  copyOnlyHarness.0.focus.current = SystemFocusSnapshot(
+    target: TargetSnapshot(
+      bundleIdentifier: "com.apple.Notes",
+      processIdentifier: 100,
+      elementIdentifier: nil,
+      isEditable: false,
+      isSecure: false
+    )
+  )
+  copyOnlyHarness.0.pressAndRelease(shortcut: .copyOnlyControlShiftSpace)
+  copyOnlyHarness.0.recognizer.complete(.success("copy-only practice"))
+  checkPracticeOutcome(
+    copyOnlyHarness.0,
+    "copy-only practice uses the native responder check when Accessibility has no identifier"
+  )
+  check(
+    copyOnlyHarness.0.outcomeObserver.outcomes.last?.delivery == .copied,
+    "copy-only practice records copied delivery for its explicit paste proof"
+  )
+}
+
 private func testReceiptEndsOnExpiryFocusChangeAndNewPress() {
   let expiryHarness = Harness()
   expiryHarness.pressAndRelease()
@@ -769,6 +1040,8 @@ enum CoordinatorHarnessMain {
     testSecureLatchAndPermissionRevocation()
     testCopyOnlyPrepareBusyAndInterruption()
     testFocusChangeAndNoSpeech()
+    testOutcomeAndMicrophoneTestBoundaries()
+    testPracticeBindingIsLiveForEveryRetry()
     testReceiptEndsOnExpiryFocusChangeAndNewPress()
     testCommonModeTimerRunsDuringMenuTracking()
     print("coordinator harness passed")

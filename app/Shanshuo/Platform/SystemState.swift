@@ -9,7 +9,11 @@ protocol PermissionProviding: AnyObject {
   var accessibilityPermission: PermissionStatus { get }
 }
 
-final class SystemPermissionService: PermissionProviding {
+protocol PermissionRequesting: PermissionProviding {
+  func requestMicrophoneAccess(completion: @escaping (Bool) -> Void)
+}
+
+final class SystemPermissionService: PermissionRequesting {
   var microphonePermission: PermissionStatus {
     switch AVCaptureDevice.authorizationStatus(for: .audio) {
     case .authorized:
@@ -27,6 +31,14 @@ final class SystemPermissionService: PermissionProviding {
 
   var accessibilityPermission: PermissionStatus {
     AXIsProcessTrusted() ? .authorized : .denied
+  }
+
+  func requestMicrophoneAccess(completion: @escaping (Bool) -> Void) {
+    AVCaptureDevice.requestAccess(for: .audio) { granted in
+      DispatchQueue.main.async {
+        completion(granted)
+      }
+    }
   }
 }
 

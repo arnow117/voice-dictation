@@ -103,11 +103,15 @@ flowchart LR
 - 引导、设置和菜单栏共享权限、模型、快捷键、暂停和练习状态，系统权限每次从 OS 读取；引导进度可续接，但权限与模型 readiness 不能由已保存的“完成”标记替代。仅复制模式的练习须从真实识别结果复制/粘贴完成，不能预填假文本通过。
 - 应用级主线程状态对象提供共享投影，窗口只发送命令；Coordinator 继续独占会话状态，ModelManager 独占模型文件变更，HistoryStore 串行拥有数据库。引导只保存进度、已访问步骤与成功/跳过标记，不保存练习文本或音频。有效步骤不包含输入监控和整理配置。
 - 麦克风测试复用受控采集边界，和听写互斥；显示测试状态后才能采集，关页/关窗/跳过/权限变化立即取消。声音检测来自真实电平；快捷键测试来自真实按住和松开事件。练习成功关联 session ID 与真实识别结果：直接模式确认控件实际收到该文本；复制模式须用户把本次实际结果粘贴入练习框。普通手输、非空初始值、快捷键注册成功或未验证插入回调都不能单独完成练习。
+- 原生练习绑定在每次按下前根据实际可见窗口、当前步骤和 first responder 重新确认；误触、取消或空输出后可直接重试，不因一次性 claim 耗尽而把后续练习写入历史。无辅助功能时也用本应用原生控件事实验证，不能只以相同 PID 代替实时练习焦点。麦克风测试的延迟启动须校验同一页面/窗口代次及实际可见状态，关闭或离页先使尚未执行的启动失效。
+- 原生窗口必须先建立父子视图层次，再激活跨视图约束。构建检查之外，生产窗口构造与布局 harness 实例化模型、引导、历史和隐私窗口（及后续设置窗口），验证没有 Objective-C 布局异常；不能把“Swift 编译成功”视为窗口能创建。首次启动窗口仍需 CUA 实际观察。
 - 偏好快捷键与当前有效快捷键分别建模；无辅助功能时强制有效值为 ⌃⇧ Space，保留用户偏好。自定义支持单修饰键及修饰键加普通键，拒绝无修饰普通键和系统保留组合，失败必须显示实际未注册状态。Fn 系统占用仅检测并给出系统设置入口，不静默修改系统键盘偏好。
+- T014 的快捷键配置使用可序列化的键码/修饰键描述，兼容读取已有 function/rightOption/copyOnlyControlShiftSpace 偏好值；不能把旧用户设置直接重置。会话开始时捕获直接插入/仅复制模式，后续取消与授权提示依据该模式，不依据某个快捷键枚举名推断。更改快捷键或进入录入控件先取消活动会话，避免换键后旧 keyUp 无法停止录音；录入期间暂停全局触发，提交/取消后恢复准确的有效配置。自定义组合消费其匹配的普通键事件，不能把该键漏入目标控件。当前单修饰键加其他键的系统组合仍取消本次听写。
 - 输入设备保存稳定 UID 或“跟随系统默认”，开始时解析并固定本次设备；设置变化及默认设备变化在下一次生效。仅设备列表变化不能取消仍可用的活动设备；活动设备消失或实际引擎重配置无法续采时取消并丢弃，绝不续接替换设备。只配置本应用输入单元，不改变系统默认设备。复用 AVAudioEngine / CoreAudio 的设备设置，参见 [Apple AUAudioUnit 设备接口](https://developer.apple.com/documentation/audiotoolbox/auaudiounit/deviceid)。
 - Coordinator 在最终仍有效的结果上发布唯一的 SessionOutcome，包含 session ID、允许保留的文本、真实 inserted/copied/unverified 结果与目标；历史与练习消费此事件，不能从胶囊文案或早到的识别回调推断成功。取消、安全输入、睡眠等丢弃路径不得产生含文本事件。历史按 session ID 去重，串行删除/清空后旧回调不能复活记录；查询排除已过期项，数据库及其 WAL/SHM/journal 和目录均限制当前用户访问。
 - 暂停支持一小时与手动恢复，立即取消活动会话；持久化暂停模式/截止时间，唤醒或重启按绝对截止时间重算。历史默认开启且保留七天；关闭只停止后续写入，已有记录由明确删除操作处理。诊断接口只接受事件枚举、耗时和错误码，不能接收任意文本或底层错误描述。
 - 公共源码构建不依赖发布私钥或本机绝对路径。开发者可选择自己的签名身份或 ad-hoc 构建；发布资产使用已有测试签名身份，并附全部许可。release 配置不携带开发模型路径、测试注入或私人数据。源码公开与发布授权见 REQ-001 DEC-022，未改变产品质量阈值。
+- 首个公开候选版本按 `v0.1.0-beta.1` 准备，应用版本 `0.1.0`；构建号使用合法数字版本，时间戳另存，不能继续把带连字符的日期当作 CFBundleVersion。分发产物为 .app 的 ZIP、DMG 和 SHA-256 清单，包含自有及第三方许可。安装说明如实说明自签名、未公证及系统的首次打开步骤，不修改全局 Gatekeeper 或绕过证书检查。版本键规则参见 [Apple Core Foundation Keys](https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html)。
 - 实现期间的单元、集成与模拟系统证据不替代 T015 的真机、权限、性能和兼容性验证；所有环境缺口与未测项目显式记录，最终验证不得将其算作通过。
 
 #### 数据模型 / 关键实体
@@ -342,3 +346,37 @@ sequenceDiagram
 - 生产输出显示这 14 条均为 `decoded_chunk_count = 0`。逐条读取原始公开 WAV 测得 RMS 约 0.00047～0.00088，全部低于 `AudioChunking.hasAudibleSignal` 的 0.001 固定阈值。对 `en-003` 做最小对照：原音频不进入解码；仅在任务临时副本提高音量至 RMS 0.01 后，同一冻结二进制解码一次并输出完整英文。因果已定位到解码前固定 RMS 过滤，非模型无响应或结果清理。
 - 当前有效方案已改为仅跳过数字静音，交同一 worker 修正并补低音量真实夹具回归；修正后重跑未增益的全部 120 条。旧结果保留为失败证据，不调换测试集或放宽评分。109 条不超过 15 秒音频的纯解码 P50 1.182 秒 / P95 2.0284 秒；这是组件时间，不能记为端到端延迟，NFR-002 仍待完整测试和产品决定。
 - 中文 `zh-018` 的单条退化在新进程和同静态库直接 C API 均复现，1024/2048 缓存对照相同；同版本 Python API 则两种缓存均正确。已在两分钟限制内完成此诊断，排除 Swift 层、会话积累与两个缓存值作为单独原因；未修改生产参数，不继续盲试。这个中文质量问题的有界诊断已使用，后续不得以重命名或换人重复取得诊断额度。当前仅有全量测试的新失败证据，尚未有针对该中文问题的实现尝试；若最终仍超过质量阈值，按产品规则请求具体决定。报告与原始结果链接见 `docs/validation/asr-7b64a10.md`。
+
+### 原生窗口启动失败定位（构建 `20261022-125650`）
+
+- CUA 两次连接未获得窗口，但本任务 GUI 进程正常存在，主线程采样在 NSApplication 事件循环，没有启动死锁。只读系统日志明确记录 `ModelManagementWindowController.configureWindow` 的 uncaught exception：NSProgressIndicator 与 NSStackView 没有 common ancestor，无法激活宽度约束。代码在加入 arrangedSubview 前激活了该约束；引导中也有同样模式。
+- T012 的先前 build 验收与静态审查未覆盖生产窗口构造，不能证明 GUI 正常。已重开 T012 并交同一 worker 修正视图层次顺序、补生产窗口构造/布局 harness，同时完成 T011/T013 已列的三项纠正。原生启动问题已经用一次有界只读诊断定位；该问题的诊断额度已使用，后续保留失败与修正历史。
+
+### T011 Onboarding、T013 隐私/暂停/历史与低音量解码修正（worker 实现，待主 Agent 验收，2026-10-22）
+
+- **Onboarding 与会话边界**：`AppModel` 在主线程发布实时权限、模型、有效快捷键、暂停和历史投影；原生窗口提供确认的八个步骤、已访问步骤返回、首个未完成步骤续接，以及下载模型时“后台继续”。拒绝麦克风权限时改为系统隐私设置入口，辅助功能授权会在实时刷新后推进步骤。麦克风测试通过 Coordinator 的独占、有限时长内存采集获得电平，关闭窗口、切页、暂停、安全输入、权限或设备中断都会停止并丢弃。设备偏好以 UID 形成每次新 operation 的不可变计划，设置变化不移动进行中的采集；只有 AVAudioEngine 配置变化才会中断当前 operation。
+- **练习与历史**：Coordinator 只在最终安全结果构造 `SessionOutcome`。Onboarding 在每次按下前实时验证其实际 `NSTextView` 焦点并绑定本次 practice purpose；直接或未验证粘贴都必须由该控件读回精确文本，复制模式还必须收到真实粘贴事件和同一文本，手输或预填不能完成。该 purpose 的结果由 `AppModel` 明确排除历史，离开或关闭练习会清空全部内存练习文本/证据。正常 inserted、copied、unverified 结果才交给 `HistoryStore`。
+- **暂停、历史与隐私**：`PauseController` 持久化手动暂停或绝对的一小时 deadline，唤醒/重启不会续长；暂停立即取消听写和麦克风测试。`HistoryStore` 串行拥有系统 SQLite3，参数绑定并按 session ID 去重，查询/清理限定七天；删除、清空和关闭后的 write generation 阻止迟到结果复活。目录为 `0700`，数据库及现有 WAL/SHM/journal 为 `0600`；若不能应用 owner-only 权限，open/写操作会明确失败，绝不报告成功。隐私页说明音频仅在内存、本地识别、当前历史路径和无遥测；不提供 REQ-002 上传或整理入口。
+- **数字静音修正**：`AudioChunking.hasNonZeroFiniteSignal` 只跳过不含有限非零样本的数字静音；不再用 RMS 阈值作为语音判定。混入有限语音的 NaN/∞ 会在送入 native recognizer 前置零，低幅度有限样本与长静音后的有效块仍走同一个生产 `Qwen3ChunkDecoder`，全零块不调用模型。该实现没有声称 VAD 或完成真实环境背景噪声验证；后者仍归 T015。`en-003.wav` 的未增益生产 CLI 回归在当前构建中得到 `decoded_chunk_count = 1`，消除了此前固定 RMS 过滤导致的跳过。
+- **自动化检查**：`xcrun swift-format format --in-place …` 后的 `xcrun swift-format lint …` 与 `git diff --check` exit 0。完整 app `swiftc -typecheck` exit 0。`SKIP_ASR=1 bash scripts/test.sh` exit 0，签名构建 `20261022-125508`，13 个 Swift 测试、Coordinator、TextInserter、几何、分块、HistoryStore、输入设备、Onboarding/暂停、ASR 取消、ModelManager 和两种 downloader harness 全部通过。History harness 显式注入 permission application 失败，验证不安全目录不能 ready 或报告成功写入；Onboarding state harness 覆盖预填/手输不能完成、真实复制粘贴与离开练习清理；Coordinator harness 覆盖 practice purpose 只匹配目标焦点且不可持久化。
+- **生产 ASR 回归**：当前构建执行 `uv run --project bench/asr python tests/integration/asr_smoke.py …` exit 0：8 条公开夹具的中文/英文/混说/实体错误率为 0.0% / 7.5% / 5.7% / 1.4%，无空输出；该冒烟不代表全量质量通过。`python3 tests/integration/asr_chunking_runtime.py …` exit 0：公开夹具派生的 180 秒音频为 9 块，尾段存在，数字静音无文本。全量 120 条复测由主 Agent 另行执行；此前失败证据及 `zh-018` 质量问题保持原样，不能宣称 NFR-003 通过。
+- **未测项**：没有启动 GUI 或伪造 OS 权限、真实麦克风、VoiceOver、全屏/多屏、设备插拔、系统设置深链接或 DEC-023 八应用矩阵的 PASS；这些必须由主 Agent/T015 真实验证。worker 运行时模型元数据未由工具返回，不能据此确认具体运行模型。
+
+### T012 窗口构造与 T011/T013 验收纠正（worker 实现，待主 Agent 验收，2026-10-22）
+
+- **原生窗口构造**：把 `ModelManagementWindowController`、Onboarding 与 History 中跨 `NSStackView` 宽度约束移到 `addArrangedSubview` 之后，保证约束双方已有共同祖先；Privacy 原有约束已在添加子视图后激活。新增 `native_window_construction_harness`，在隔离的 `NSApplication` 中以临时 HistoryStore 和协议替身实例化并 `layoutSubtreeIfNeeded` ModelManagement、Onboarding、History、Privacy 四个真实 controller；不显示窗口、不请求权限、不采集麦克风、不联网。该 harness exit 0，覆盖此前生产启动日志定位的异常路径，但不替代主 Agent 的 CUA 首启观察。
+- **练习重试与延迟测试采集**：practice purpose 现在由 Onboarding 每次按下前实时确认当前步骤、可见且 key 的同一窗口、精确 `NSTextView` first responder 与 press target 后才交给 Coordinator；短按、Esc 或静音后不移动焦点的重试不会复用旧 snapshot，也不会进入历史。无辅助功能的复制模式仍要求这项本地 first-responder 确认。麦克风测试延迟启动由可注入 generation gate 管理，离开步骤或关闭窗口会使已排队的主队列 action 失效；真正开始前还重查步骤、窗口和实际可见的电平指示。Coordinator harness 和 Onboarding state harness 覆盖这些分支。
+- **暂停菜单**：菜单栏现在明确提供“暂停 1 小时”“暂停直到手动恢复”和暂停期间的“恢复语音输入”，三项均委托 AppModel 已持久化的 PauseController；state harness 覆盖 active/manual presentation 以及原有 deadline、重启、唤醒语义。
+- **本次检查**：`xcrun swift-format format -i`（本次 Swift 文件）与 `git diff --check` exit 0。`bash tests/integration/run_native_window_construction_harness.sh` exit 0。`SKIP_ASR=1 bash scripts/test.sh` exit 0，签名构建 `20261022-130455`：13 个 Swift 单元测试、Coordinator、TextInserter、几何、chunk decoder、HistoryStore、输入设备、Onboarding/暂停、native window construction、ASR cancellation、ModelManager 和 downloader harness 全部通过。未重复长 ASR；主 Agent 在独立冻结路径运行 120 条原始夹具，结果另行记录。真实 GUI、权限、麦克风、多屏和应用矩阵仍未在此记录为 PASS。
+
+### T011/T013 最后适配器纠正（worker 实现，待主 Agent 验收，2026-10-22）
+
+- **输入设备**：每个新采集 operation 仍以创建时的稳定 UID/默认偏好快照为准。`InputDeviceSessionConfigurator` 现在既对显式 UID，也对“跟随系统默认”查询并显式设置本 app `AVAudioEngine` input unit 的当前 `AudioDeviceID`；不会改写 macOS 默认输入。这样停止/复用 engine 后，先前选择的设备不会覆盖后续的默认设备；下一个 operation 会再次读取系统默认。注入式 adapter harness 覆盖显式 A → 默认 B，以及默认随后改回 A 的下一 operation。
+- **SQLite 错误结果**：HistoryStore 的 records 循环只在 `SQLITE_DONE` 返回成功，任何其他 `sqlite3_step` 结果返回 `.storage`；delete 将 open 与 prepare 失败分开处理，prepare 失败不再把成功 open 映射为成功 delete。生产 store harness 用独立 SQLite 连接实际删除 `history` 表，验证 records 和 delete 都向调用方返回 `.storage`。
+- **本次检查**：`xcrun swift-format format -i`（InputDeviceSelection、MemoryAudioCapture、HistoryStore 与相关 harness）和 `git diff --check` exit 0。`bash tests/integration/run_input_device_selection_harness.sh`、`run_history_store_harness.sh`、`run_coordinator_harness.sh`、`run_native_window_construction_harness.sh` 均 exit 0。最后 `SKIP_ASR=1 bash scripts/test.sh` exit 0，签名构建 `20261022-131011`，13 个 Swift 单元测试及全部生产 harness 通过；未重复 120 条 ASR 评测。
+
+### T011/T012/T013 主 Agent build 验收与全量复测（2026-10-22）
+
+主 Agent 复核了实时 practice provider、延迟麦克风测试失效、暂停菜单、输入设备切换和 SQLite 错误处理；同一 worker 的构建 `20261022-131011` 通过 13 个单元测试及全部 harness，formatter 和 diff 检查通过。接受这三个 Task 的 build 交付并按依赖顺序标记 done，真实系统验收仍属于 T015。CUA 已实际看到构建 `20261022-130455` 的欢迎窗口和麦克风步骤，无布局异常；尚未授予权限或声称完整引导通过。
+
+独立冻结的构建 `20261022-125650` 完成原始 120 条 ASR，全部实际解码，无空输出。中文/英文/混说/实体错误率为 6.48% / 6.03% / 12.94% / 3.81%；英文低音量跳过问题解决，NFR-003 整体仍未通过，中文与混说的公开测试版例外已向用户请求决定，未自行放宽。报告见 `docs/validation/asr-rms-fix-125650.md`，原始结果和 binary SHA-256 一并保存。纯解码 P50 1.383 秒、P95 2.2294 秒不能作为端到端验收。

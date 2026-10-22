@@ -25,10 +25,11 @@ enum Qwen3ChunkDecoder {
       guard shouldContinue() else {
         break
       }
-      let chunk = Array(samples[range])
-      guard AudioChunking.hasAudibleSignal(chunk) else {
+      let rawChunk = Array(samples[range])
+      guard AudioChunking.hasNonZeroFiniteSignal(rawChunk) else {
         continue
       }
+      let chunk = AudioChunking.sanitizedForRecognition(rawChunk)
       decodedChunkCount += 1
       let rawText = decodeChunk(chunk, sampleRate, hotwords)
       if let transcript = TranscriptCleaner.clean(rawText) {

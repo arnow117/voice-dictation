@@ -28,6 +28,21 @@ bash "$ROOT/tests/integration/run_text_inserter_harness.sh"
 echo "== screen geometry harness"
 bash "$ROOT/tests/integration/run_screen_geometry_harness.sh"
 
+echo "== chunk decoder harness"
+bash "$ROOT/tests/integration/run_chunk_decoder_harness.sh"
+
+echo "== history store harness"
+bash "$ROOT/tests/integration/run_history_store_harness.sh"
+
+echo "== input device selection harness"
+bash "$ROOT/tests/integration/run_input_device_selection_harness.sh"
+
+echo "== onboarding and pause state harness"
+bash "$ROOT/tests/integration/run_onboarding_state_harness.sh"
+
+echo "== native window construction harness"
+bash "$ROOT/tests/integration/run_native_window_construction_harness.sh"
+
 echo "== ASR cancellation harness"
 bash "$ROOT/tests/integration/run_asr_cancellation_harness.sh"
 

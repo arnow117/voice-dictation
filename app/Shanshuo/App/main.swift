@@ -20,6 +20,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private let sessionItem = NSMenuItem(title: "状态：就绪", action: nil, keyEquivalent: "")
   private let accessItem = NSMenuItem(title: "直接插入：检查中…", action: nil, keyEquivalent: "")
   private let hotkeyItem = NSMenuItem(title: "快捷键：检查中…", action: nil, keyEquivalent: "")
+  private let pauseOneHourItem = NSMenuItem(title: "暂停 1 小时", action: nil, keyEquivalent: "")
+  private let pauseUntilManualItem = NSMenuItem(
+    title: "暂停直到手动恢复", action: nil, keyEquivalent: "")
+  private let resumeItem = NSMenuItem(title: "恢复语音输入", action: nil, keyEquivalent: "")
   private var stateTimer: Timer?
   private var workspaceObservers: [NSObjectProtocol] = []
   private var distributedObservers: [NSObjectProtocol] = []
@@ -33,6 +37,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private var coordinator: DictationCoordinator!
   private var modelManager: ModelManager?
   private var modelWindowController: ModelManagementWindowController?
+  private var onboardingWindowController: OnboardingWindowController?
+  private var historyWindowController: HistoryWindowController?
+  private var privacyWindowController: PrivacyWindowController?
+  private var appModel: AppModel?
   private var modelObservation: UUID?
 
   func applicationDidFinishLaunching(_ notification: Notification) {
@@ -61,10 +69,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       audioCapture: audioCapture,
       recognizer: recognizer,
       textInserter: inserter,
-      hotkeys: hotkeys
+      hotkeys: hotkeys,
+      onSessionOutcome: { [weak self] outcome in
+        self?.appModel?.handleSessionOutcome(outcome)
+      }
     )
     hotkeys.onHold = { [weak self] shortcut, isPressed in
       self?.coordinator.hotkeyChanged(shortcut, isPressed: isPressed)
+      self?.appModel?.recordHotkeyEvent(shortcut, isPressed: isPressed)
     }
     hotkeys.onCancel = { [weak self] in
       self?.coordinator.cancelFromHotkey()
@@ -77,6 +89,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     installSystemObservers()
     refreshSystemState()
     coordinator.prepareAudio()
+    DispatchQueue.main.async { [weak self] in
+      self?.openOnboardingIfNeeded()
+    }
   }
 
   func applicationWillTerminate(_ notification: Notification) {
@@ -105,6 +120,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       ))
     menu.addItem(sessionItem)
     menu.addItem(modelItem)
+    let continueSetupItem = NSMenuItem(
+      title: "继续设置…", action: #selector(openOnboarding), keyEquivalent: "")
+    continueSetupItem.target = self
+    menu.addItem(continueSetupItem)
     let manageModelItem = NSMenuItem(
       title: "管理语音模型…",
       action: #selector(openModelManagement),
@@ -114,6 +133,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     menu.addItem(manageModelItem)
     menu.addItem(accessItem)
     menu.addItem(hotkeyItem)
+    pauseOneHourItem.target = self
+    pauseOneHourItem.action = #selector(pauseForOneHour)
+    menu.addItem(pauseOneHourItem)
+    pauseUntilManualItem.target = self
+    pauseUntilManualItem.action = #selector(pauseUntilManualResume)
+    menu.addItem(pauseUntilManualItem)
+    resumeItem.target = self
+    resumeItem.action = #selector(resumeDictation)
+    menu.addItem(resumeItem)
+    let historyItem = NSMenuItem(
+      title: "语音输入历史…", action: #selector(openHistory), keyEquivalent: "")
+    historyItem.target = self
+    menu.addItem(historyItem)
+    let privacyItem = NSMenuItem(title: "隐私…", action: #selector(openPrivacy), keyEquivalent: "")
+    privacyItem.target = self
+    menu.addItem(privacyItem)
     menu.addItem(
       NSMenuItem(title: "开启直接插入…", action: #selector(openAccessibilitySettings), keyEquivalent: ""))
     menu.addItem(.separator())
@@ -142,6 +177,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self?.updateModelMenu(status)
       }
       manager.bootstrap()
+      let appModel = AppModel(
+        permissions: permissions,
+        hotkeys: hotkeys,
+        coordinator: coordinator,
+        audioCapture: audioCapture,
+        modelManager: manager,
+        historyStore: HistoryStore(directory: Paths.historyDirectory)
+      )
+      self.appModel = appModel
+      onboardingWindowController = OnboardingWindowController(
+        model: appModel,
+        openAccessibilitySettings: { [weak self] in
+          self?.openAccessibilitySettings()
+        },
+        openModelManagement: { [weak self] in
+          self?.openModelManagement()
+        }
+      )
+      historyWindowController = HistoryWindowController(model: appModel)
+      privacyWindowController = PrivacyWindowController(model: appModel)
     } catch {
       modelItem.title = "语音模型：配置错误"
     }
@@ -168,13 +223,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   }
 
   private func refreshSystemState() {
-    coordinator?.refreshSystemState()
+    appModel?.refreshLiveState()
+    if appModel == nil {
+      coordinator?.refreshSystemState()
+    }
     if permissions.accessibilityPermission.isAuthorized {
       accessItem.title = "直接插入：已授权"
     } else {
       accessItem.title = "直接插入：未授权（仅复制模式 ⌃⇧ Space）"
     }
     hotkeyItem.title = hotkeys.isShortcutAvailable ? "快捷键：就绪" : "快捷键：不可用，请检查设置"
+    if let appModel {
+      let pauseMenu = PauseMenuPresentation(snapshot: appModel.pauseSnapshot())
+      pauseOneHourItem.isHidden = !pauseMenu.showPauseForOneHour
+      pauseUntilManualItem.isHidden = !pauseMenu.showPauseUntilManualResume
+      resumeItem.isHidden = !pauseMenu.showResume
+    }
   }
 
   private func installSystemObservers() {
@@ -234,5 +298,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   @objc private func openModelManagement() {
     modelWindowController?.showWindow(nil)
     NSApp.activate(ignoringOtherApps: true)
+  }
+
+  @objc private func openOnboarding() {
+    onboardingWindowController?.showWindow(nil)
+  }
+
+  @objc private func openHistory() {
+    historyWindowController?.showWindow(nil)
+  }
+
+  @objc private func openPrivacy() {
+    privacyWindowController?.showWindow(nil)
+  }
+
+  @objc private func pauseForOneHour() {
+    guard let appModel else {
+      return
+    }
+    appModel.pauseForOneHour()
+    refreshSystemState()
+  }
+
+  @objc private func pauseUntilManualResume() {
+    guard let appModel else {
+      return
+    }
+    appModel.pauseUntilManualResume()
+    refreshSystemState()
+  }
+
+  @objc private func resumeDictation() {
+    guard let appModel else {
+      return
+    }
+    appModel.resumeDictation()
+    refreshSystemState()
+  }
+
+  private func openOnboardingIfNeeded() {
+    guard let appModel,
+      !appModel.onboardingProgress().completed.contains(.complete)
+    else {
+      return
+    }
+    onboardingWindowController?.showWindow(nil)
   }
 }

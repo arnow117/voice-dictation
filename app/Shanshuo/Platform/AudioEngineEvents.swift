@@ -26,14 +26,6 @@ final class SystemAudioEngineEventSource: AudioEngineEventObserving {
     engine: AVAudioEngine,
     onConfigurationChange: @escaping () -> Void
   ) -> AudioEngineEventObservation {
-    let audioDeviceChanged: (Notification) -> Void = { notification in
-      guard let device = notification.object as? AVCaptureDevice,
-        device.hasMediaType(.audio)
-      else {
-        return
-      }
-      onConfigurationChange()
-    }
     let engineChange = notificationCenter.addObserver(
       forName: .AVAudioEngineConfigurationChange,
       object: engine,
@@ -41,23 +33,9 @@ final class SystemAudioEngineEventSource: AudioEngineEventObserving {
     ) { _ in
       onConfigurationChange()
     }
-    let deviceDisconnected = notificationCenter.addObserver(
-      forName: AVCaptureDevice.wasDisconnectedNotification,
-      object: nil,
-      queue: nil
-    ) { notification in
-      audioDeviceChanged(notification)
-    }
-    let deviceConnected = notificationCenter.addObserver(
-      forName: AVCaptureDevice.wasConnectedNotification,
-      object: nil,
-      queue: nil
-    ) { notification in
-      audioDeviceChanged(notification)
-    }
     return NotificationAudioEngineEventObservation(
       notificationCenter: notificationCenter,
-      tokens: [engineChange, deviceDisconnected, deviceConnected]
+      tokens: [engineChange]
     )
   }
 }

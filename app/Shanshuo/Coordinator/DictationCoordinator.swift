@@ -14,6 +14,66 @@ protocol CoordinatorTimerScheduling {
     -> CoordinatorTimer
 }
 
+/// A narrowly scoped claim that an onboarding practice session began in the app's dedicated
+/// practice control. It prevents ordinary results in another Shanshuo window from being treated
+/// as practice, and keeps practice text out of the persisted history boundary.
+struct PracticeSessionBinding: Equatable {
+  let target: TargetSnapshot
+
+  func matches(_ candidate: TargetSnapshot) -> Bool {
+    guard target.bundleIdentifier == candidate.bundleIdentifier,
+      target.processIdentifier == candidate.processIdentifier
+    else {
+      return false
+    }
+    if let candidateIdentifier = candidate.elementIdentifier {
+      return target.elementIdentifier == candidateIdentifier
+    }
+    // Without Accessibility, the platform cannot expose an AX identifier. The onboarding window
+    // performs a fresh native first-responder check for every press before it supplies a binding.
+    // That preserves the practice boundary while the copy-only fallback remains usable.
+    return true
+  }
+}
+
+enum SessionPurpose: Equatable {
+  case dictation
+  case onboardingPractice(PracticeSessionBinding)
+}
+
+/// The only result that downstream features may retain. It is emitted once, after the coordinator
+/// has finished its permission, secure-input, focus, and insertion checks. Cancelled sessions never
+/// construct this value, so history and onboarding do not need to infer safety from UI copy.
+struct SessionOutcome {
+  enum Delivery: String {
+    case inserted
+    case copied
+    case unverified
+  }
+
+  let sessionID: UUID
+  let recognizedText: String
+  let finalText: String
+  let delivery: Delivery
+  let target: TargetSnapshot
+  let purpose: SessionPurpose
+  let createdAt: Date
+
+  var isPersistableInHistory: Bool {
+    if case .onboardingPractice = purpose {
+      return false
+    }
+    return true
+  }
+}
+
+enum MicrophoneTestCompletion: Equatable {
+  case detectedSound
+  case noSound
+  case cancelled
+  case unavailable
+}
+
 private final class SystemDictationClock: DictationClock {
   func now() -> Date {
     Date()
@@ -53,11 +113,13 @@ final class MainRunLoopTimerScheduler: CoordinatorTimerScheduling {
 /// a new session.
 final class DictationCoordinator {
   private struct ActiveSession {
+    let id: UUID
     let generation: SessionGeneration
     let startedAt: Date
     let pressTarget: SystemFocusSnapshot
     var releaseTarget: SystemFocusSnapshot?
     let shortcut: HoldShortcut
+    let purpose: SessionPurpose
   }
 
   private struct RetainedReceipt {
@@ -75,6 +137,7 @@ final class DictationCoordinator {
   private let clock: DictationClock
   private let timerScheduler: CoordinatorTimerScheduling
   private let onReceiptEnded: (InsertionReceipt) -> Void
+  private let onSessionOutcome: (SessionOutcome) -> Void
   private var activeSession: ActiveSession?
   private var recordingTimer: CoordinatorTimer?
   private var receiptExpiryTimer: CoordinatorTimer?
@@ -82,10 +145,19 @@ final class DictationCoordinator {
   private var pendingRecognition: ASRTranscriptionOperation?
   private var audioOperation: AudioCaptureOperation?
   private var retainedReceipt: RetainedReceipt?
+  private var microphoneTestOperation: AudioCaptureOperation?
+  private var microphoneTestTimer: CoordinatorTimer?
+  private var microphoneTestHasSound = false
+  private var microphoneTestLevelHandler: ((Float) -> Void)?
+  private var microphoneTestCompletion: ((MicrophoneTestCompletion) -> Void)?
   private var generation = SessionGeneration()
   private(set) var phase: DictationPhase = .idle
   private(set) var isPaused = false
   private var secureInputLatched = false
+  /// The onboarding window supplies a binding only while its exact native practice control is
+  /// visible and first responder. Querying this on every press avoids carrying a stale "armed"
+  /// exception across a cancelled, silent, or short practice attempt.
+  private var onboardingPracticeBindingProvider: ((TargetSnapshot) -> PracticeSessionBinding?)?
 
   init(
     permissions: PermissionProviding,
@@ -97,7 +169,8 @@ final class DictationCoordinator {
     hotkeys: HotkeyMonitoring,
     clock: DictationClock = SystemDictationClock(),
     timerScheduler: CoordinatorTimerScheduling = MainRunLoopTimerScheduler(),
-    onReceiptEnded: @escaping (InsertionReceipt) -> Void = { _ in }
+    onReceiptEnded: @escaping (InsertionReceipt) -> Void = { _ in },
+    onSessionOutcome: @escaping (SessionOutcome) -> Void = { _ in }
   ) {
     self.permissions = permissions
     self.focusInspector = focusInspector
@@ -109,6 +182,7 @@ final class DictationCoordinator {
     self.clock = clock
     self.timerScheduler = timerScheduler
     self.onReceiptEnded = onReceiptEnded
+    self.onSessionOutcome = onSessionOutcome
     self.audioCapture.onInterruption = { [weak self] operation in
       self?.handleAudioInterruption(operation)
     }
@@ -120,6 +194,66 @@ final class DictationCoordinator {
     if paused {
       cancel(message: "语音输入已暂停")
     }
+  }
+
+  var isMicrophoneTestActive: Bool {
+    microphoneTestOperation != nil
+  }
+
+  /// Starts a bounded, memory-only microphone level check. The caller must first make its test
+  /// indicator visible; this method deliberately never begins an invisible capture. A test shares
+  /// the same exclusive audio adapter as dictation and therefore cannot race a dictation session.
+  @discardableResult
+  func beginMicrophoneTest(
+    indicatorVisible: Bool,
+    onLevel: @escaping (Float) -> Void,
+    completion: @escaping (MicrophoneTestCompletion) -> Void
+  ) -> Bool {
+    requireMainThread()
+    guard indicatorVisible,
+      phase == .idle,
+      microphoneTestOperation == nil,
+      !isPaused,
+      permissions.microphonePermission.isAuthorized,
+      audioCapture.isAvailable,
+      !focusInspector.snapshot().target.isSecure
+    else {
+      completion(.unavailable)
+      return false
+    }
+
+    microphoneTestHasSound = false
+    microphoneTestLevelHandler = onLevel
+    microphoneTestCompletion = completion
+    let operation = audioCapture.start(
+      onLevel: { [weak self] level in
+        self?.handleMicrophoneTestLevel(level)
+      },
+      completion: { [weak self] operation, result in
+        self?.microphoneTestDidStart(operation, result: result)
+      }
+    )
+    microphoneTestOperation = operation
+    return true
+  }
+
+  func endMicrophoneTest() {
+    requireMainThread()
+    finishMicrophoneTest(cancelled: true)
+  }
+
+  /// Installs the onboarding-owned live practice check. The provider is asked for every new
+  /// press, rather than retaining a previous focus snapshot after a practice attempt finishes.
+  func setOnboardingPracticeBindingProvider(
+    _ provider: @escaping (TargetSnapshot) -> PracticeSessionBinding?
+  ) {
+    requireMainThread()
+    onboardingPracticeBindingProvider = provider
+  }
+
+  func clearOnboardingPracticeBindingProvider() {
+    requireMainThread()
+    onboardingPracticeBindingProvider = nil
   }
 
   /// The audio adapter owns AVAudioEngine on its dedicated serial queue. The coordinator only
@@ -137,6 +271,8 @@ final class DictationCoordinator {
     requireMainThread()
     hotkeys.refresh(accessibilityAuthorized: permissions.accessibilityPermission.isAuthorized)
     expireReceiptIfNeeded()
+
+    refreshMicrophoneTestState()
 
     guard let activeSession else {
       return
@@ -192,6 +328,10 @@ final class DictationCoordinator {
 
   private func handleAudioInterruption(_ operation: AudioCaptureOperation) {
     requireMainThread()
+    if microphoneTestOperation === operation {
+      finishMicrophoneTest(cancelled: true)
+      return
+    }
     guard audioOperation === operation else {
       return
     }
@@ -200,7 +340,7 @@ final class DictationCoordinator {
 
   private func beginRecording(shortcut: HoldShortcut) {
     clearRetainedReceipt()
-    guard phase == .idle else {
+    guard phase == .idle, microphoneTestOperation == nil else {
       indicator.showBusyFeedback()
       return
     }
@@ -225,11 +365,13 @@ final class DictationCoordinator {
 
     generation.invalidate()
     let session = ActiveSession(
+      id: UUID(),
       generation: generation,
       startedAt: clock.now(),
       pressTarget: pressTarget,
       releaseTarget: nil,
-      shortcut: shortcut
+      shortcut: shortcut,
+      purpose: claimedPurpose(for: pressTarget.target)
     )
     activeSession = session
     secureInputLatched = false
@@ -412,17 +554,18 @@ final class DictationCoordinator {
     case .discard:
       finish(message: decision.message)
     case .copy:
-      startInsertion(generation: completionGeneration) { completion in
+      startInsertion(text: text, generation: completionGeneration) { completion in
         self.textInserter.copy(text, completion: completion)
       }
     case .insert:
-      startInsertion(generation: completionGeneration) { completion in
+      startInsertion(text: text, generation: completionGeneration) { completion in
         self.textInserter.insert(text, expectedTarget: releaseTarget, completion: completion)
       }
     }
   }
 
   private func startInsertion(
+    text: String,
     generation completionGeneration: SessionGeneration,
     start: (@escaping (TextInsertionResult) -> Void) -> TextInsertionOperation
   ) {
@@ -432,13 +575,19 @@ final class DictationCoordinator {
       guard let operation else {
         return
       }
-      self?.handleInsertion(result, generation: completionGeneration, operation: operation)
+      self?.handleInsertion(
+        result,
+        text: text,
+        generation: completionGeneration,
+        operation: operation
+      )
     }
     operation.adopt(underlyingOperation)
   }
 
   private func handleInsertion(
     _ result: TextInsertionResult,
+    text: String,
     generation completionGeneration: SessionGeneration,
     operation: TextInsertionOperation
   ) {
@@ -449,7 +598,10 @@ final class DictationCoordinator {
     else {
       return
     }
-    let wasCopyOnlySession = activeSession?.shortcut == .copyOnlyControlShiftSpace
+    guard let session = activeSession else {
+      return
+    }
+    let wasCopyOnlySession = session.shortcut == .copyOnlyControlShiftSpace
     pendingInsertion = nil
     cancelIfSecureInputActive()
     guard activeSession?.generation == completionGeneration, phase == .inserting else {
@@ -459,14 +611,19 @@ final class DictationCoordinator {
     switch result {
     case .inserted(let receipt):
       retain(receipt: receipt)
+      publishOutcome(session: session, text: text, delivery: .inserted)
       finish(message: "已插入")
     case .copied(let message):
+      publishOutcome(session: session, text: text, delivery: .copied)
       if wasCopyOnlySession {
         finishCopyOnly(message: message)
       } else {
         finish(message: message)
       }
-    case .discarded(let message), .unverified(let message):
+    case .unverified(let message):
+      publishOutcome(session: session, text: text, delivery: .unverified)
+      finish(message: message)
+    case .discarded(let message):
       finish(message: message)
     }
   }
@@ -565,6 +722,9 @@ final class DictationCoordinator {
   }
 
   private func cancel(message: String) {
+    if microphoneTestOperation != nil {
+      finishMicrophoneTest(cancelled: true)
+    }
     guard phase != .idle else {
       return
     }
@@ -615,6 +775,113 @@ final class DictationCoordinator {
   private func cancelAudioOperation() {
     audioOperation?.cancel()
     audioOperation = nil
+  }
+
+  private func publishOutcome(
+    session: ActiveSession,
+    text: String,
+    delivery: SessionOutcome.Delivery
+  ) {
+    guard let target = session.releaseTarget?.target else {
+      return
+    }
+    onSessionOutcome(
+      SessionOutcome(
+        sessionID: session.id,
+        recognizedText: text,
+        finalText: text,
+        delivery: delivery,
+        target: target,
+        purpose: session.purpose,
+        createdAt: clock.now()
+      )
+    )
+  }
+
+  private func claimedPurpose(for pressTarget: TargetSnapshot) -> SessionPurpose {
+    guard let binding = onboardingPracticeBindingProvider?(pressTarget),
+      binding.matches(pressTarget)
+    else {
+      return .dictation
+    }
+    return .onboardingPractice(binding)
+  }
+
+  private func handleMicrophoneTestLevel(_ level: Float) {
+    requireMainThread()
+    guard microphoneTestOperation != nil else {
+      return
+    }
+    // This threshold is intentionally low: the test only establishes that the selected input has
+    // delivered a non-silent buffer. It does not record, transcribe, or retain the signal.
+    if level >= 0.01 {
+      microphoneTestHasSound = true
+    }
+    microphoneTestLevelHandler?(level)
+  }
+
+  private func microphoneTestDidStart(
+    _ operation: AudioCaptureOperation,
+    result: Result<Void, Error>
+  ) {
+    requireMainThread()
+    guard microphoneTestOperation === operation else {
+      operation.cancel()
+      return
+    }
+    switch result {
+    case .success:
+      microphoneTestTimer?.cancel()
+      microphoneTestTimer = timerScheduler.schedule(after: 8, repeats: false) { [weak self] in
+        self?.finishMicrophoneTest(cancelled: false)
+      }
+    case .failure:
+      finishMicrophoneTest(cancelled: true, completion: .unavailable)
+    }
+  }
+
+  private func refreshMicrophoneTestState() {
+    guard microphoneTestOperation != nil else {
+      return
+    }
+    let focus = focusInspector.snapshot()
+    guard permissions.microphonePermission.isAuthorized,
+      audioCapture.isAvailable,
+      !focus.target.isSecure,
+      !isPaused
+    else {
+      finishMicrophoneTest(cancelled: true)
+      return
+    }
+  }
+
+  private func finishMicrophoneTest(
+    cancelled: Bool,
+    completion forcedCompletion: MicrophoneTestCompletion? = nil
+  ) {
+    requireMainThread()
+    guard let operation = microphoneTestOperation else {
+      return
+    }
+    microphoneTestOperation = nil
+    microphoneTestTimer?.cancel()
+    microphoneTestTimer = nil
+    let completed = microphoneTestCompletion
+    microphoneTestCompletion = nil
+    microphoneTestLevelHandler = nil
+
+    if cancelled {
+      operation.cancel()
+      completed?(forcedCompletion ?? .cancelled)
+      return
+    }
+
+    let detectedSound = microphoneTestHasSound
+    audioCapture.stop(operation) { audio in
+      var disposableAudio = audio
+      disposableAudio.erase()
+      completed?(detectedSound ? .detectedSound : .noSound)
+    }
   }
 
   private func requireMainThread() {

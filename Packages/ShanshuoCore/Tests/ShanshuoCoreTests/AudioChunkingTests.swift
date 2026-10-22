@@ -19,8 +19,13 @@ struct AudioChunkingTests {
   @Test("empty input creates no recognizer work and English chunks keep a word boundary")
   func emptyAndTextJoining() {
     #expect(AudioChunking.ranges(sampleCount: 0, sampleRate: 16_000).isEmpty)
-    #expect(!AudioChunking.hasAudibleSignal(Array(repeating: 0, count: 320_000)))
-    #expect(AudioChunking.hasAudibleSignal([0, 0.01, 0]))
+    #expect(!AudioChunking.hasNonZeroFiniteSignal(Array(repeating: 0, count: 320_000)))
+    #expect(AudioChunking.hasNonZeroFiniteSignal([0, 0.000_001, 0]))
+    #expect(!AudioChunking.hasNonZeroFiniteSignal([.nan, .infinity, -.infinity]))
+    #expect(
+      AudioChunking.sanitizedForRecognition([.nan, .infinity, -.infinity, 0.000_001])
+        == [0, 0, 0, 0.000_001]
+    )
     #expect(AudioChunking.join(["ship", "the build"]) == "ship the build")
     #expect(AudioChunking.join(["今天", "开会"]) == "今天开会")
   }
