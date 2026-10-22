@@ -59,6 +59,12 @@ enum PerformanceEventKind: String, Codable, CaseIterable, Sendable {
   case practicePaste = "practice_paste"
   case practiceOutcome = "practice_outcome"
   case practiceValidation = "practice_validation"
+  case settingsFocusProbePhase = "settings_focus_probe_phase"
+  case settingsFocusApplicationActive = "settings_focus_application_active"
+  case settingsFocusWindowKey = "settings_focus_window_key"
+  case settingsFocusFirstResponder = "settings_focus_first_responder"
+  case settingsFocusInitialFirstResponder = "settings_focus_initial_first_responder"
+  case settingsFocusShortcutPopupKeyView = "settings_focus_shortcut_popup_key_view"
 }
 
 enum PerformanceEventResult: String, Codable, CaseIterable, Sendable {
@@ -96,6 +102,123 @@ enum PerformanceEventResult: String, Codable, CaseIterable, Sendable {
   case practiceValidationPasteNotObserved = "practice_validation_paste_not_observed"
   case practiceValidationPasteExpectationMissing = "practice_validation_paste_expectation_missing"
   case practiceValidationGenerationInvalidated = "practice_validation_generation_invalidated"
+  case settingsFocusWindowShown = "settings_focus_window_shown"
+  case settingsFocusWindowBecameKey = "settings_focus_window_became_key"
+  case settingsFocusWindowResignedKey = "settings_focus_window_resigned_key"
+  case settingsFocusTabKeyDownBefore = "settings_focus_tab_key_down_before"
+  case settingsFocusShiftTabKeyDownBefore = "settings_focus_shift_tab_key_down_before"
+  case settingsFocusTabKeyDownAfter = "settings_focus_tab_key_down_after"
+  case settingsFocusShiftTabKeyDownAfter = "settings_focus_shift_tab_key_down_after"
+  case settingsFocusTrue = "settings_focus_true"
+  case settingsFocusFalse = "settings_focus_false"
+  case settingsFocusResponderNone = "settings_focus_responder_none"
+  case settingsFocusResponderWindow = "settings_focus_responder_window"
+  case settingsFocusResponderShortcutPopup = "settings_focus_responder_shortcut_popup"
+  case settingsFocusResponderInputDevicePopup = "settings_focus_responder_input_device_popup"
+  case settingsFocusResponderShortcutCapture = "settings_focus_responder_shortcut_capture"
+  case settingsFocusResponderSoundCheckbox = "settings_focus_responder_sound_checkbox"
+  case settingsFocusResponderShortcutCaptureButton =
+    "settings_focus_responder_shortcut_capture_button"
+  case settingsFocusResponderKeyboardSettingsButton =
+    "settings_focus_responder_keyboard_settings_button"
+  case settingsFocusResponderAccessibilitySettingsButton =
+    "settings_focus_responder_accessibility_settings_button"
+  case settingsFocusResponderModelManagementButton =
+    "settings_focus_responder_model_management_button"
+  case settingsFocusResponderHistoryButton = "settings_focus_responder_history_button"
+  case settingsFocusResponderPrivacyButton = "settings_focus_responder_privacy_button"
+  case settingsFocusResponderOther = "settings_focus_responder_other"
+}
+
+/// The only settings-window lifecycle points recorded during keyboard-focus diagnosis. Values do
+/// not contain key text, titles, or object identities.
+enum SettingsFocusProbeMoment: Equatable {
+  case windowShown
+  case windowBecameKey
+  case windowResignedKey
+  case tabKeyDownBefore
+  case shiftTabKeyDownBefore
+  case tabKeyDownAfter
+  case shiftTabKeyDownAfter
+
+  fileprivate var eventResult: PerformanceEventResult {
+    switch self {
+    case .windowShown:
+      return .settingsFocusWindowShown
+    case .windowBecameKey:
+      return .settingsFocusWindowBecameKey
+    case .windowResignedKey:
+      return .settingsFocusWindowResignedKey
+    case .tabKeyDownBefore:
+      return .settingsFocusTabKeyDownBefore
+    case .shiftTabKeyDownBefore:
+      return .settingsFocusShiftTabKeyDownBefore
+    case .tabKeyDownAfter:
+      return .settingsFocusTabKeyDownAfter
+    case .shiftTabKeyDownAfter:
+      return .settingsFocusShiftTabKeyDownAfter
+    }
+  }
+}
+
+/// Closed labels for known native settings controls. `other` deliberately carries no type, title,
+/// or object description when AppKit's responder is not one of those controls.
+enum SettingsFocusProbeResponder: Equatable {
+  case none
+  case window
+  case shortcutPopup
+  case inputDevicePopup
+  case shortcutCapture
+  case soundCheckbox
+  case shortcutCaptureButton
+  case keyboardSettingsButton
+  case accessibilitySettingsButton
+  case modelManagementButton
+  case historyButton
+  case privacyButton
+  case other
+
+  fileprivate var eventResult: PerformanceEventResult {
+    switch self {
+    case .none:
+      return .settingsFocusResponderNone
+    case .window:
+      return .settingsFocusResponderWindow
+    case .shortcutPopup:
+      return .settingsFocusResponderShortcutPopup
+    case .inputDevicePopup:
+      return .settingsFocusResponderInputDevicePopup
+    case .shortcutCapture:
+      return .settingsFocusResponderShortcutCapture
+    case .soundCheckbox:
+      return .settingsFocusResponderSoundCheckbox
+    case .shortcutCaptureButton:
+      return .settingsFocusResponderShortcutCaptureButton
+    case .keyboardSettingsButton:
+      return .settingsFocusResponderKeyboardSettingsButton
+    case .accessibilitySettingsButton:
+      return .settingsFocusResponderAccessibilitySettingsButton
+    case .modelManagementButton:
+      return .settingsFocusResponderModelManagementButton
+    case .historyButton:
+      return .settingsFocusResponderHistoryButton
+    case .privacyButton:
+      return .settingsFocusResponderPrivacyButton
+    case .other:
+      return .settingsFocusResponderOther
+    }
+  }
+}
+
+/// A fixed, local-only settings focus sample. A newly generated probe UUID groups all six event
+/// rows; it is not a dictation session or a user identifier.
+struct SettingsFocusProbeSnapshot: Equatable {
+  let moment: SettingsFocusProbeMoment
+  let applicationIsActive: Bool
+  let windowIsKey: Bool
+  let firstResponder: SettingsFocusProbeResponder
+  let initialFirstResponder: SettingsFocusProbeResponder
+  let shortcutPopupCanBecomeKeyView: Bool
 }
 
 /// Fixed reasons for refusing a live onboarding practice claim. They describe only native control
@@ -313,6 +436,52 @@ extension PerformanceEventRecording {
 
   func recordPractice(_ fact: PracticeDiagnosticFact, sessionID: UUID) {
     record(kind: fact.eventKind, result: fact.eventResult, sessionID: sessionID)
+  }
+
+  func recordSettingsFocusProbe(_ snapshot: SettingsFocusProbeSnapshot, probeID: UUID) {
+    let timestamp = now()
+    record(
+      kind: .settingsFocusProbePhase,
+      result: snapshot.moment.eventResult,
+      sessionID: probeID,
+      timestamp: timestamp,
+      audioDuration: nil
+    )
+    record(
+      kind: .settingsFocusApplicationActive,
+      result: snapshot.applicationIsActive ? .settingsFocusTrue : .settingsFocusFalse,
+      sessionID: probeID,
+      timestamp: timestamp,
+      audioDuration: nil
+    )
+    record(
+      kind: .settingsFocusWindowKey,
+      result: snapshot.windowIsKey ? .settingsFocusTrue : .settingsFocusFalse,
+      sessionID: probeID,
+      timestamp: timestamp,
+      audioDuration: nil
+    )
+    record(
+      kind: .settingsFocusFirstResponder,
+      result: snapshot.firstResponder.eventResult,
+      sessionID: probeID,
+      timestamp: timestamp,
+      audioDuration: nil
+    )
+    record(
+      kind: .settingsFocusInitialFirstResponder,
+      result: snapshot.initialFirstResponder.eventResult,
+      sessionID: probeID,
+      timestamp: timestamp,
+      audioDuration: nil
+    )
+    record(
+      kind: .settingsFocusShortcutPopupKeyView,
+      result: snapshot.shortcutPopupCanBecomeKeyView ? .settingsFocusTrue : .settingsFocusFalse,
+      sessionID: probeID,
+      timestamp: timestamp,
+      audioDuration: nil
+    )
   }
 }
 

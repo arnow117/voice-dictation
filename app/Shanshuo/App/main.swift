@@ -243,7 +243,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         openKeyboardSettings: { [weak self] in self?.openKeyboardSettings() },
         openModelManagement: { [weak self] in self?.openModelManagement() },
         openHistory: { [weak self] in self?.openHistory() },
-        openPrivacy: { [weak self] in self?.openPrivacy() }
+        openPrivacy: { [weak self] in self?.openPrivacy() },
+        performanceDiagnostics: performanceDiagnostics
       )
     } catch {
       modelItem.title = "语音模型：配置错误"

@@ -55,6 +55,10 @@ enum PerformanceDiagnosticsHarness {
       emitProductionJSONL(to: URL(fileURLWithPath: CommandLine.arguments[2]))
       return
     }
+    if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--emit-focus-jsonl" {
+      emitSettingsFocusProbeJSONL(to: URL(fileURLWithPath: CommandLine.arguments[2]))
+      return
+    }
 
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
       "shanshuo-performance-diagnostics-\(UUID().uuidString)",
@@ -136,6 +140,42 @@ enum PerformanceDiagnosticsHarness {
       "production recordPractice emits only the fixed validation event"
     )
 
+    let focusProbeRecorder = RecordingPerformanceDiagnostics()
+    var focusProbeID = UUID()
+    while focusProbeID == focusProbeRecorder.processID {
+      focusProbeID = UUID()
+    }
+    let focusProbeSnapshot = SettingsFocusProbeSnapshot(
+      moment: .tabKeyDownBefore,
+      applicationIsActive: true,
+      windowIsKey: false,
+      firstResponder: .shortcutPopup,
+      initialFirstResponder: .window,
+      shortcutPopupCanBecomeKeyView: true
+    )
+    focusProbeRecorder.recordSettingsFocusProbe(focusProbeSnapshot, probeID: focusProbeID)
+    let expectedFocusEvents: [(PerformanceEventKind, PerformanceEventResult)] = [
+      (.settingsFocusProbePhase, .settingsFocusTabKeyDownBefore),
+      (.settingsFocusApplicationActive, .settingsFocusTrue),
+      (.settingsFocusWindowKey, .settingsFocusFalse),
+      (.settingsFocusFirstResponder, .settingsFocusResponderShortcutPopup),
+      (.settingsFocusInitialFirstResponder, .settingsFocusResponderWindow),
+      (.settingsFocusShortcutPopupKeyView, .settingsFocusTrue),
+    ]
+    check(
+      focusProbeRecorder.events.map(\.kind) == expectedFocusEvents.map { $0.0 }
+        && focusProbeRecorder.events.map(\.result) == expectedFocusEvents.map { $0.1 },
+      "a settings focus probe emits only the fixed snapshot facts"
+    )
+    check(
+      focusProbeRecorder.events.allSatisfy { event in
+        event.sessionID == focusProbeID
+          && event.sessionID != focusProbeRecorder.processID
+          && event.audioDurationNanoseconds == nil
+      },
+      "settings focus records use a separate probe UUID and no audio duration"
+    )
+
     let capped = BoundedPerformanceEventLog(
       directory: directory,
       processID: UUID(),
@@ -201,6 +241,35 @@ enum PerformanceDiagnosticsHarness {
       try data.write(to: outputURL, options: .atomic)
     } catch {
       fputs("FAIL: could not write production JSONL fixture\n", stderr)
+      exit(1)
+    }
+  }
+
+  private static func emitSettingsFocusProbeJSONL(to outputURL: URL) {
+    let recorder = RecordingPerformanceDiagnostics()
+    var probeID = UUID()
+    while probeID == recorder.processID {
+      probeID = UUID()
+    }
+    let snapshot = SettingsFocusProbeSnapshot(
+      moment: .shiftTabKeyDownAfter,
+      applicationIsActive: true,
+      windowIsKey: true,
+      firstResponder: .inputDevicePopup,
+      initialFirstResponder: .none,
+      shortcutPopupCanBecomeKeyView: true
+    )
+    recorder.recordSettingsFocusProbe(snapshot, probeID: probeID)
+
+    do {
+      let encoder = JSONEncoder()
+      let data = try recorder.events.reduce(into: Data()) { data, event in
+        data.append(try encoder.encode(event))
+        data.append(0x0A)
+      }
+      try data.write(to: outputURL, options: .atomic)
+    } catch {
+      fputs("FAIL: could not write production settings focus JSONL fixture\n", stderr)
       exit(1)
     }
   }

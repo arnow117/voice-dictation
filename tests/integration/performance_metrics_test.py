@@ -28,6 +28,7 @@ MEASURE = importlib.util.module_from_spec(MEASURE_SPEC)
 MEASURE_SPEC.loader.exec_module(MEASURE)
 
 SWIFT_EVENT_JSONL = os.environ.get("SHANSHUO_SWIFT_EVENT_JSONL")
+SWIFT_FOCUS_EVENT_JSONL = os.environ.get("SHANSHUO_SWIFT_FOCUS_EVENT_JSONL")
 
 
 def event(
@@ -345,6 +346,16 @@ class PerformanceMetricsTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             REPORT_METRICS.validate_event(invalid_process_id)
 
+        invalid_focus_result = event(
+            process_id,
+            session_id,
+            "settings_focus_window_key",
+            "settings_focus_not_a_result",
+            2,
+        )
+        with self.assertRaises(ValueError):
+            REPORT_METRICS.validate_event(invalid_focus_result)
+
         invalid_duration = dict(no_duration)
         invalid_duration["audio_duration_ns"] = True
         with self.assertRaises(ValueError):
@@ -399,9 +410,14 @@ class PerformanceMetricsTest(unittest.TestCase):
         self.assertEqual(raw_session_id, raw_session_id.upper())
 
         events, invalid_lines = REPORT_METRICS.read_events(directory)
+        selected_events = [
+            event
+            for event in events
+            if event["process_id"] == canonical_process_id
+        ]
         self.assertEqual(invalid_lines, [])
-        self.assertEqual(events[0]["process_id"], canonical_process_id)
-        self.assertEqual(events[0]["session_id"], canonical_session_id)
+        self.assertEqual(len(selected_events), 1)
+        self.assertEqual(selected_events[0]["session_id"], canonical_session_id)
 
         for process_selector in (raw_process_id.upper(), raw_process_id.lower()):
             for session_selector in (raw_session_id.upper(), raw_session_id.lower()):
@@ -436,6 +452,65 @@ class PerformanceMetricsTest(unittest.TestCase):
                 self.assertEqual(summary["diagnostic_event_count"], 1)
                 self.assertEqual(summary["selected_process_id"], canonical_process_id)
                 self.assertEqual(summary["selected_session_id"], canonical_session_id)
+
+    @unittest.skipUnless(
+        SWIFT_FOCUS_EVENT_JSONL,
+        "Swift settings focus fixture is supplied by the integration runner",
+    )
+    def test_swift_encoded_focus_probe_is_valid_and_does_not_enter_latency_metrics(self) -> None:
+        assert SWIFT_FOCUS_EVENT_JSONL is not None
+        fixture_path = Path(SWIFT_FOCUS_EVENT_JSONL)
+        raw_events = [
+            json.loads(line)
+            for line in fixture_path.read_text(encoding="utf-8").splitlines()
+        ]
+        raw_process_id = raw_events[0]["process_id"]
+        raw_probe_id = raw_events[0]["session_id"]
+        expected_kinds = {
+            "settings_focus_probe_phase",
+            "settings_focus_application_active",
+            "settings_focus_window_key",
+            "settings_focus_first_responder",
+            "settings_focus_initial_first_responder",
+            "settings_focus_shortcut_popup_key_view",
+        }
+
+        self.assertEqual(len(raw_events), 6)
+        self.assertEqual({event["kind"] for event in raw_events}, expected_kinds)
+        self.assertEqual({event["session_id"] for event in raw_events}, {raw_probe_id})
+        self.assertNotEqual(raw_process_id, raw_probe_id)
+
+        events, invalid_lines = REPORT_METRICS.read_events(fixture_path.parent)
+        focus_events = [
+            event
+            for event in events
+            if event["process_id"] == str(uuid.UUID(raw_process_id))
+        ]
+        self.assertEqual(invalid_lines, [])
+        self.assertEqual(len(focus_events), 6)
+        self.assertEqual({event["session_id"] for event in focus_events}, {str(uuid.UUID(raw_probe_id))})
+
+        report = REPORT_METRICS.report(
+            self.arguments(
+                fixture_path.parent,
+                expected_cold_start_samples=0,
+                expected_display_samples=0,
+                expected_short_samples=0,
+                expected_long_samples=0,
+                process_id=raw_process_id,
+                session_id=raw_probe_id,
+            )
+        )
+        short = self.metric_by_name(
+            report,
+            "release to AX verified insertion, audio duration at most",
+        )
+        self.assertEqual(report["diagnostic_event_count"], 6)
+        self.assertEqual(short["successful_samples"], 0)
+        self.assertEqual(short["failed_samples"], 0)
+        self.assertEqual(short["incomplete_samples"], 0)
+        self.assertEqual(short["unknown_duration_samples"], 0)
+        self.assertEqual(short["missing_release_samples"], 0)
 
     def test_session_selection_limits_the_measurement_set(self) -> None:
         process_id = str(uuid.uuid4())

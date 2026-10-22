@@ -15,16 +15,40 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSMe
   private let openModelManagement: () -> Void
   private let openHistory: () -> Void
   private let openPrivacy: () -> Void
+  private let performanceDiagnostics: PerformanceEventRecording?
 
   private let shortcutPopup = NSPopUpButton(frame: .zero, pullsDown: false)
   private let shortcutStatus = NSTextField(wrappingLabelWithString: "")
   private let shortcutCapture = HotkeyCaptureView(frame: .zero)
+  private let shortcutCaptureButton = NSButton(
+    title: "录入自定义组合键…",
+    target: nil,
+    action: nil
+  )
+  private let keyboardSettingsButton = NSButton(
+    title: "打开键盘设置",
+    target: nil,
+    action: nil
+  )
   private let inputDevicePopup = NSPopUpButton(frame: .zero, pullsDown: false)
   private let soundButton = NSButton(checkboxWithTitle: "播放开始录音提示音", target: nil, action: nil)
+  private let accessibilitySettingsButton = NSButton(
+    title: "开启直接插入…",
+    target: nil,
+    action: nil
+  )
   private let modelStatus = NSTextField(wrappingLabelWithString: "")
+  private let modelManagementButton = NSButton(
+    title: "管理语音模型…",
+    target: nil,
+    action: nil
+  )
   private let historyStatus = NSTextField(wrappingLabelWithString: "")
+  private let historyButton = NSButton(title: "语音输入历史…", target: nil, action: nil)
   private let privacyStatus = NSTextField(wrappingLabelWithString: "")
+  private let privacyButton = NSButton(title: "隐私…", target: nil, action: nil)
   private var observation: UUID?
+  private var focusProbeMonitor: SettingsFocusProbeMonitor?
   private var isRecordingShortcut = false
   private var shortcutFeedbackOverride: String?
   private var shortcutMenuIsTracking = false
@@ -39,7 +63,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSMe
     openKeyboardSettings: @escaping () -> Void,
     openModelManagement: @escaping () -> Void,
     openHistory: @escaping () -> Void,
-    openPrivacy: @escaping () -> Void
+    openPrivacy: @escaping () -> Void,
+    performanceDiagnostics: PerformanceEventRecording? = nil
   ) {
     self.model = model
     self.openAccessibilitySettings = openAccessibilitySettings
@@ -47,6 +72,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSMe
     self.openModelManagement = openModelManagement
     self.openHistory = openHistory
     self.openPrivacy = openPrivacy
+    self.performanceDiagnostics = performanceDiagnostics
 
     let window = NSWindow(
       contentRect: NSRect(x: 0, y: 0, width: 620, height: 580),
@@ -74,6 +100,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSMe
   }
 
   deinit {
+    focusProbeMonitor?.stop()
     if let observation {
       model.removeObserver(observation)
     }
@@ -81,8 +108,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSMe
 
   override func showWindow(_ sender: Any?) {
     super.showWindow(sender)
+    installFocusProbeMonitorIfNeeded()
     window?.makeKeyAndOrderFront(nil)
     NSApp.activate(ignoringOtherApps: true)
+    recordFocusProbeSnapshot(moment: .windowShown)
     model.refreshInputDevices()
     if let latestSnapshot {
       render(latestSnapshot)
@@ -91,6 +120,15 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSMe
 
   func windowWillClose(_ notification: Notification) {
     stopShortcutRecording()
+    focusProbeMonitor?.stop()
+  }
+
+  func windowDidBecomeKey(_ notification: Notification) {
+    recordFocusProbeSnapshot(moment: .windowBecameKey)
+  }
+
+  func windowDidResignKey(_ notification: Notification) {
+    recordFocusProbeSnapshot(moment: .windowResignedKey)
   }
 
   private func configureWindow() {
@@ -136,11 +174,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSMe
       detail: "按住说话，松开结束。录入组合键时全局触发会暂停。",
       control: shortcutPopup
     )
-    let captureButton = NSButton(
-      title: "录入自定义组合键…", target: self, action: #selector(startShortcutRecording))
-    captureButton.setAccessibilityLabel("录入自定义按住快捷键")
-    let keyboardSettingsButton = NSButton(
-      title: "打开键盘设置", target: self, action: #selector(openKeyboardSettingsAction))
+    shortcutCaptureButton.target = self
+    shortcutCaptureButton.action = #selector(startShortcutRecording)
+    shortcutCaptureButton.setAccessibilityLabel("录入自定义按住快捷键")
+    keyboardSettingsButton.target = self
+    keyboardSettingsButton.action = #selector(openKeyboardSettingsAction)
     keyboardSettingsButton.setAccessibilityLabel("打开 macOS 键盘快捷键设置")
 
     inputDevicePopup.target = self
@@ -162,23 +200,24 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSMe
       control: soundButton
     )
 
-    let permissionButton = NSButton(
-      title: "开启直接插入…", target: self, action: #selector(openAccessibilitySettingsAction))
-    permissionButton.setAccessibilityLabel("打开辅助功能设置以开启直接插入")
+    accessibilitySettingsButton.target = self
+    accessibilitySettingsButton.action = #selector(openAccessibilitySettingsAction)
+    accessibilitySettingsButton.setAccessibilityLabel("打开辅助功能设置以开启直接插入")
     let permissionRow = row(
       title: "直接插入",
       detail: "辅助功能未授权时，闪说固定使用 ⌃⇧ Space 并仅复制结果。",
-      control: permissionButton
+      control: accessibilitySettingsButton
     )
 
     let integrationTitle = NSTextField(labelWithString: "语音模型、历史与隐私")
     integrationTitle.font = .systemFont(ofSize: 17, weight: .semibold)
-    let modelButton = NSButton(
-      title: "管理语音模型…", target: self, action: #selector(openModelManagementAction))
-    let historyButton = NSButton(
-      title: "语音输入历史…", target: self, action: #selector(openHistoryAction))
-    let privacyButton = NSButton(title: "隐私…", target: self, action: #selector(openPrivacyAction))
-    modelButton.setAccessibilityLabel("打开语音模型管理")
+    modelManagementButton.target = self
+    modelManagementButton.action = #selector(openModelManagementAction)
+    historyButton.target = self
+    historyButton.action = #selector(openHistoryAction)
+    privacyButton.target = self
+    privacyButton.action = #selector(openPrivacyAction)
+    modelManagementButton.setAccessibilityLabel("打开语音模型管理")
     historyButton.setAccessibilityLabel("打开语音输入历史")
     privacyButton.setAccessibilityLabel("打开隐私说明")
     modelStatus.maximumNumberOfLines = 0
@@ -191,7 +230,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSMe
     stack.addArrangedSubview(title)
     stack.addArrangedSubview(shortcutRow)
     stack.addArrangedSubview(shortcutStatus)
-    stack.addArrangedSubview(captureButton)
+    stack.addArrangedSubview(shortcutCaptureButton)
     stack.addArrangedSubview(shortcutCapture)
     stack.addArrangedSubview(keyboardSettingsButton)
     stack.addArrangedSubview(inputRow)
@@ -199,7 +238,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSMe
     stack.addArrangedSubview(permissionRow)
     stack.addArrangedSubview(integrationTitle)
     stack.addArrangedSubview(modelStatus)
-    stack.addArrangedSubview(modelButton)
+    stack.addArrangedSubview(modelManagementButton)
     stack.addArrangedSubview(historyStatus)
     stack.addArrangedSubview(historyButton)
     stack.addArrangedSubview(privacyStatus)
@@ -230,6 +269,74 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSMe
     row.spacing = 16
     labels.widthAnchor.constraint(greaterThanOrEqualToConstant: 340).isActive = true
     return row
+  }
+
+  private func installFocusProbeMonitorIfNeeded() {
+    guard performanceDiagnostics != nil, let window else {
+      return
+    }
+    if focusProbeMonitor == nil {
+      focusProbeMonitor = SettingsFocusProbeMonitor(window: window) { [weak self] moment in
+        self?.recordFocusProbeSnapshot(moment: moment)
+      }
+    }
+    focusProbeMonitor?.start()
+  }
+
+  private func recordFocusProbeSnapshot(moment: SettingsFocusProbeMoment) {
+    guard let performanceDiagnostics, let window, window.isVisible else {
+      return
+    }
+
+    let snapshot = SettingsFocusProbeSnapshot(
+      moment: moment,
+      applicationIsActive: NSApp.isActive,
+      windowIsKey: window.isKeyWindow,
+      firstResponder: focusResponderCategory(window.firstResponder),
+      initialFirstResponder: focusResponderCategory(window.initialFirstResponder),
+      shortcutPopupCanBecomeKeyView: shortcutPopup.canBecomeKeyView
+    )
+    performanceDiagnostics.recordSettingsFocusProbe(snapshot, probeID: UUID())
+  }
+
+  private func focusResponderCategory(_ responder: AnyObject?) -> SettingsFocusProbeResponder {
+    guard let responder else {
+      return .none
+    }
+    if responder === window {
+      return .window
+    }
+    if responder === shortcutPopup {
+      return .shortcutPopup
+    }
+    if responder === inputDevicePopup {
+      return .inputDevicePopup
+    }
+    if responder === shortcutCapture {
+      return .shortcutCapture
+    }
+    if responder === soundButton {
+      return .soundCheckbox
+    }
+    if responder === shortcutCaptureButton {
+      return .shortcutCaptureButton
+    }
+    if responder === keyboardSettingsButton {
+      return .keyboardSettingsButton
+    }
+    if responder === accessibilitySettingsButton {
+      return .accessibilitySettingsButton
+    }
+    if responder === modelManagementButton {
+      return .modelManagementButton
+    }
+    if responder === historyButton {
+      return .historyButton
+    }
+    if responder === privacyButton {
+      return .privacyButton
+    }
+    return .other
   }
 
   private func render(_ snapshot: AppStatusSnapshot) {
@@ -447,6 +554,103 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSMe
       return "需要修复"
     case .failed:
       return "不可用"
+    }
+  }
+}
+
+/// Passively observes ordinary Tab and Shift-Tab after this settings window is visible. The local
+/// monitor always returns the exact event it received, so it cannot consume, synthesize, or alter
+/// keyboard routing.
+enum SettingsFocusProbeTabDirection: Equatable {
+  case forward
+  case backward
+
+  var moments: (before: SettingsFocusProbeMoment, after: SettingsFocusProbeMoment) {
+    switch self {
+    case .forward:
+      return (.tabKeyDownBefore, .tabKeyDownAfter)
+    case .backward:
+      return (.shiftTabKeyDownBefore, .shiftTabKeyDownAfter)
+    }
+  }
+}
+
+final class SettingsFocusProbeMonitor {
+  private weak var window: NSWindow?
+  private let recordMoment: (SettingsFocusProbeMoment) -> Void
+  private var eventMonitor: Any?
+  private var generation: UInt64 = 0
+
+  init(
+    window: NSWindow,
+    recordMoment: @escaping (SettingsFocusProbeMoment) -> Void
+  ) {
+    self.window = window
+    self.recordMoment = recordMoment
+  }
+
+  deinit {
+    stop()
+  }
+
+  func start() {
+    guard eventMonitor == nil else {
+      return
+    }
+
+    generation &+= 1
+    eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+      self?.observe(event)
+      return event
+    }
+  }
+
+  func stop() {
+    generation &+= 1
+    if let eventMonitor {
+      NSEvent.removeMonitor(eventMonitor)
+      self.eventMonitor = nil
+    }
+  }
+
+  static func tabDirection(
+    for modifierFlags: NSEvent.ModifierFlags
+  ) -> SettingsFocusProbeTabDirection? {
+    let deviceIndependentModifiers = modifierFlags.intersection(.deviceIndependentFlagsMask)
+    let navigationModifiers = deviceIndependentModifiers.subtracting(.capsLock)
+
+    if navigationModifiers.isEmpty {
+      return .forward
+    }
+    if navigationModifiers == [.shift] {
+      return .backward
+    }
+    return nil
+  }
+
+  private func observe(_ event: NSEvent) {
+    guard let window, window.isVisible, event.window === window else {
+      return
+    }
+    guard event.keyCode == UInt16(kVK_Tab) else {
+      return
+    }
+
+    guard let direction = Self.tabDirection(for: event.modifierFlags) else {
+      return
+    }
+
+    let moments = direction.moments
+    recordMoment(moments.before)
+
+    let eventGeneration = generation
+    DispatchQueue.main.async { [weak self, weak window] in
+      guard let self, let window, self.generation == eventGeneration,
+        self.window === window, window.isVisible
+      else {
+        return
+      }
+      self.recordMoment(moments.after)
     }
   }
 }

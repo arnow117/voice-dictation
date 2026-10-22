@@ -1,4 +1,5 @@
 import AppKit
+import Carbon
 import Foundation
 import ShanshuoCore
 
@@ -34,6 +35,14 @@ private func check(_ condition: @autoclosure () -> Bool, _ message: String) {
   guard condition() else {
     fputs("FAIL: \(message)\n", stderr)
     exit(1)
+  }
+}
+
+private final class RecordingEventWindow: NSWindow {
+  private(set) var receivedEvent: NSEvent?
+
+  override func sendEvent(_ event: NSEvent) {
+    receivedEvent = event
   }
 }
 
@@ -259,6 +268,92 @@ enum NativeWindowConstructionHarness {
       "resetting a shortcut test publishes the visible incomplete state"
     )
     appModel.removeObserver(shortcutObservation)
+
+    check(
+      SettingsFocusProbeMonitor.tabDirection(for: []) == .forward,
+      "the focus probe classifies an unmodified Tab as forward navigation"
+    )
+    check(
+      SettingsFocusProbeMonitor.tabDirection(for: [.shift]) == .backward,
+      "the focus probe classifies Shift-Tab as backward navigation"
+    )
+    check(
+      SettingsFocusProbeMonitor.tabDirection(for: [.capsLock]) == .forward,
+      "the focus probe ignores Caps Lock while classifying ordinary Tab"
+    )
+    check(
+      SettingsFocusProbeMonitor.tabDirection(for: [.shift, .capsLock]) == .backward,
+      "the focus probe ignores Caps Lock while classifying Shift-Tab"
+    )
+    for rejectedModifiers: NSEvent.ModifierFlags in [
+      [.control],
+      [.option],
+      [.command],
+      [.function],
+      [.shift, .control],
+      [.capsLock, .command],
+    ] {
+      check(
+        SettingsFocusProbeMonitor.tabDirection(for: rejectedModifiers) == nil,
+        "the focus probe ignores non-ordinary Tab combinations"
+      )
+    }
+
+    let focusProbeWindow = RecordingEventWindow(
+      contentRect: NSRect(x: 0, y: 0, width: 100, height: 100),
+      styleMask: [.titled],
+      backing: .buffered,
+      defer: false
+    )
+    var focusProbeMoments: [SettingsFocusProbeMoment] = []
+    let focusProbeMonitor = SettingsFocusProbeMonitor(window: focusProbeWindow) { moment in
+      focusProbeMoments.append(moment)
+    }
+    focusProbeMonitor.start()
+    defer { focusProbeMonitor.stop() }
+    var downstreamLocalMonitorReceivedTab = false
+    let downstreamLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+      if event.keyCode == UInt16(kVK_Tab) {
+        downstreamLocalMonitorReceivedTab = true
+      }
+      return event
+    }
+    guard let downstreamLocalMonitor else {
+      check(false, "the native harness installs a downstream local monitor")
+      return
+    }
+    defer { NSEvent.removeMonitor(downstreamLocalMonitor) }
+
+    guard
+      let tabEvent = NSEvent.keyEvent(
+        with: .keyDown,
+        location: .zero,
+        modifierFlags: [],
+        timestamp: 0,
+        windowNumber: focusProbeWindow.windowNumber,
+        context: nil,
+        characters: "\t",
+        charactersIgnoringModifiers: "\t",
+        isARepeat: false,
+        keyCode: UInt16(kVK_Tab)
+      )
+    else {
+      check(false, "the native harness creates a Tab event")
+      return
+    }
+    NSApp.sendEvent(tabEvent)
+    check(
+      downstreamLocalMonitorReceivedTab,
+      "an app-routed Tab event remains in the local monitor chain with the production focus monitor installed"
+    )
+    check(
+      focusProbeMoments.isEmpty,
+      "a hidden settings window records no focus snapshot from an app-routed Tab event"
+    )
+    check(
+      focusProbeWindow.receivedEvent == nil,
+      "AppKit does not deliver a key event to an invisible window in the isolated harness"
+    )
 
     let coldStartAudio = FakeAudioCapture()
     let coldStartModelManager = FakeModelManager()
