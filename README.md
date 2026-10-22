@@ -6,8 +6,8 @@ macOS 桌面端语音输入：在任意应用中按住快捷键说话，松开�
 
 | ID | 内容 | 优先级 | 依赖 | 状态 | 产品上下文 |
 |---|---|---|---|---|---|
-| REQ-001 | 核心闭环：Onboarding 与权限引导、按住说话、本地中英识别、插入当前输入框、录音提示与隐私 | P0 | — | Ready，开放问题 OPEN-004 待确认 | [REQ-001.product.md](.sdlc-v1/context/REQ-001.product.md) |
-| REQ-002 | 识别文本书面化与结构化整理（OpenRouter） | P1 | REQ-001 | Spec 已完成，待 REQ-001 发布后进入 plan | [REQ-002.product.md](.sdlc-v1/context/REQ-002.product.md) |
+| REQ-001 | 核心闭环：Onboarding 与权限引导、按住说话、本地中英识别、插入当前输入框、录音提示与隐私 | P0 | — | v0.1.0-beta.1；限制见已知问题，发布状态以 SDLC 记录为准 | [REQ-001.product.md](.sdlc-v1/context/REQ-001.product.md) |
+| REQ-002 | 识别文本书面化与结构化整理（MiniMax，尚未接入） | P1 | REQ-001 | Spec 已完成，待 REQ-001 发布后进入 plan | [REQ-002.product.md](.sdlc-v1/context/REQ-002.product.md) |
 | REQ-003 | 专有词与个人词典 | P1 | REQ-001 | Spec，静默学习细则 OPEN-003 待确认 | [REQ-003.product.md](.sdlc-v1/context/REQ-003.product.md) |
 
 调研资料：[本地中英文 ASR 模型选型笔记](research/asr-model-selection.md)、[plan 阶段复用候选与 macOS 平台调研](research/plan-reuse-and-platform-notes.md)。
@@ -16,7 +16,7 @@ macOS 桌面端语音输入：在任意应用中按住快捷键说话，松开�
 
 | Feature | Requirement | 状态 | 研发上下文 |
 |---|---|---|---|
-| FEAT-001 闪说核心闭环 | REQ-001 | plan 已确认，待开始 build（16 个任务，T001～T003 验证任务可并行） | [FEAT-001.engineering.md](.sdlc-v1/context/FEAT-001.engineering.md) |
+| FEAT-001 闪说核心闭环 | REQ-001 | 核心实现与安装候选已完成；验证、评审和发布状态见 SDLC 记录 | [FEAT-001.engineering.md](.sdlc-v1/context/FEAT-001.engineering.md) |
 
 ## 交互原型
 
@@ -32,9 +32,15 @@ macOS 桌面端语音输入：在任意应用中按住快捷键说话，松开�
 
 已知准确率限制：120 条公开夹具的完整生产复测中，中文 CER 6.48%（目标 ≤ 6%）、混说 MER 12.94%（目标 ≤ 10%）未达标；英文 WER 6.03%（目标 ≤ 8%）达标。首个 `v0.1.0-beta.1` 按 DEC-024 接受这两项限制，原 NFR-003 仍未通过。中文原生与 Python 运行时差异尚未解决；完整方法、环境和原始结果见 [ASR 验证报告](docs/validation/asr-rms-fix-125650.md)。
 
+## 安装测试版
+
+`v0.1.0-beta.1` 提供 arm64 的 ZIP、DMG 和 `SHA256SUMS.txt`；应用版本为 `0.1.0`。下载见 [测试版发布页](https://github.com/arnow117/voice-dictation/releases/tag/v0.1.0-beta.1)。测试版使用项目测试签名，未经过 Apple 公证，首次打开可能需要在 macOS“隐私与安全性”中明确允许。安装步骤、权限说明和模型下载行为见 [安装说明](docs/install.md)，未完成验证与质量限制见 [已知问题](docs/known-issues.md)。
+
+当前安装包只含 REQ-001 的本地听写。MiniMax 是后续 REQ-002 整理的已选方向，尚未接入应用或安装包；个人词典也尚未接入。
+
 ## 当前核心闭环（开发构建）
 
-运行 `bash scripts/test.sh` 会执行 Swift 单元测试、构建并签名 `.work/build/Shanshuo.app`，然后使用本地 ASR 夹具进行冒烟检查。正常启动菜单栏应用时只采集麦克风输入；`--transcribe <wav>` 是显式的开发/测试 CLI，不是产品运行路径。
+运行 `bash scripts/test.sh` 会执行 Swift 单元测试、构建默认 ad-hoc 开发 `.app`，然后使用本地 ASR 夹具进行冒烟检查。发布脚本才明确使用项目测试签名。正常启动菜单栏应用时只采集麦克风输入；`--transcribe <wav>` 是显式的开发/测试 CLI，不是产品运行路径。
 
 应用需要麦克风权限。授予辅助功能权限后，默认按住 Fn 录音；松开后在确认过的同一可编辑目标中直接插入。未授予辅助功能权限时，按住 ⌃⇧ Space 进入仅复制模式，结果写入剪贴板，由用户自行粘贴。应用不会请求输入监控权限。
 

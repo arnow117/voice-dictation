@@ -126,6 +126,8 @@ flowchart LR
 - 每次真实按下在所有拒绝检查前建立独立 attempt UUID，松开最多一次并只归属该按下；忙碌、权限等拒绝也记录失败，不能写到正在识别的旧会话。汇总的测量集可由明确 process/session UUID 选择，不能按成功事件倒推分母；缺松开、停止或时长的尝试保留为不完整/未知时长并阻止相应延迟通过，不静默过滤。NFR-006 的 5 秒限制校验每次冷启动（最大值），P95 仅辅助描述。音频实际 start/stop 事件在 engine queue 的真实边界记录，Coordinator 回调如保留则使用不同名称。输入计划开始失效就撤销 idle readiness，只有当前计划的 ticket 提交才恢复；权限设置失败的诊断存储停写。投影去重必须覆盖快捷键测试等可见状态，不能吞掉成功或重置通知。
 - T015 设置页键盘定位仅做被动观察：在显示、成为/失去 key window、本窗口 Tab/Shift-Tab 到达及主线程随后处理后，记录固定分类的 app active/window key、真实 first responder、initial responder 和快捷键 popup 的 canBecomeKeyView。复用 owner-only 有界诊断存储，不记录其他按键、控件文本、窗口标题或系统数据；不得重算/遍历 key-view loop 或主动移动焦点来改变被测条件。观察事件与听写 attempt 分开，不污染性能分母。先区分事件投递、真实控件焦点与 AX 报告，再决定修复，不把无焦点环一律当作 key-view loop 缺失。
 
+- 当前交付按 REQ-001 DEC-025 收敛为可安装测试版。设置页焦点深入排查与冷启动优化暂缓；实际失败、未完成指标与兼容性矩阵统一保留在 `docs/known-issues.md`。必要安全/隐私回归、已知关键缺陷与安装验证继续执行。原始工作树的未验收冷启动诊断不进入本次安装候选源码。
+
 #### 数据模型 / 关键实体
 
 - `DictationSession`（内存）：`id`、`phase`（idle / listening / recognizing / inserting / cancelled / failed）、`startedAt`、`targetAtPress`、`targetAtRelease`、`audioBuffer`（16 kHz 单声道 Float32，3 分钟上限约 11 MB，会话结束即释放）、`failureReason`。
@@ -255,8 +257,8 @@ sequenceDiagram
 | T012 | 模型管理 | `app/Shanshuo/Models/`、设置 › 语音模型 | T003、T008 | 下载、暂停、续传、切换源、校验、切换模型、删除、修复入口 | 集成测试（本地 HTTP 服务模拟断网与坏文件） |
 | T013 | 隐私、暂停与历史 | `app/Shanshuo/{History,Privacy}/`、设置 › 历史 / 隐私 | T010 | 暂停 1 小时 / 手动恢复；7 天历史、删除、清空、关闭；隐私页；日志无文本 | 单测 + 日志扫描脚本 + 原生 UI 检查 |
 | T014 | 设置窗口与菜单栏 | `app/Shanshuo/UI/Settings/`、`MenuBar*` | T011～T013 | 通用（快捷键、输入设备、提示音）各页与原型一致；菜单栏项与状态 | 协议测试 + 原生 UI 键盘/VoiceOver 检查 |
-| T015 | 质量指标与兼容性验收 | `bench/e2e/`、`docs/validation/` | T010～T014 | NFR-001～NFR-007 实测；DEC-023 本机八个应用插入成功率 ≥ 98%，四个缺失应用明确未测 | 报告入库（供 sdlc-validate） |
-| T016 | 测试版打包与安装说明 | `scripts/release/`、entitlements、`docs/install.md` | T015 | 用 ED-012 身份签名的 .app 与 DMG；安装说明写明首次打开的系统设置步骤和"未在 M1 上测试"（DEC-019） | `codesign --verify --deep --strict`；在另一个 macOS 用户账户中按说明全新安装 |
+| T015 | 质量指标与兼容性验收 | `bench/e2e/`、`docs/validation/` | T010～T014 | 按 DEC-025 的可用测试版范围核对真实核心闭环与安全/隐私生产回归；原指标失败及未完成矩阵列清单，不冒充通过 | 证据和已知问题入库（供 sdlc-validate） |
+| T016 | 测试版打包与安装说明 | `scripts/release/`、entitlements、`docs/install.md` | T015 | ED-012 签名的 .app/ZIP/DMG/校验和，附许可和已知问题；公共源码可独立构建 | `codesign --verify --deep --strict`、挂载/复制/运行 smoke；新账户检查按 DEC-025 列后续 |
 
 执行顺序：T001、T002、T003 可并行，是所有实现 Task 的前置；T004 → T005 → T006/T008（可并行）→ T007、T009 → T010 → T012 → T011 → T013 → T014 → T015 → T016。
 
@@ -280,6 +282,12 @@ sequenceDiagram
 按 REQ-001 产品上下文"发布后观察计划"执行；本 Feature 提供应用内本地统计（首次听写完成、延迟分布、插入失败次数、修复卡片出现次数），只存本机，不上传。
 
 ## 实现记录（实际）
+
+### 可安装测试版的取舍、源码隔离与写入者交接（2026-10-22）
+
+用户明确要求先交付可安装、可实际使用版本，非关键项后置，已记录 DEC-025。T015 按该范围完成 build 验收：真实原生练习的麦克风→识别→插入和不入历史已有完整事件证据，用户另确认备忘录热键输入生效；核心安全输入、取消、焦点变化、剪贴板所有权和音频/模型生命周期复用同代码的生产 harness 通过证据。当前基线为 `9e24010`；在此前全量非 ASR 检查与 Caps Lock 纯分类回归后，核心路径没有新增改动。原 NFR 的失败、缺失矩阵及系统场景均继续披露，不改记为通过；最终候选还须重新执行必要生产回归和安装 smoke。
+
+原 `.worktrees/feat-FEAT-001` 中的未验收冷启动诊断改动及证据完整保留，原写入者已停止。安装候选改由独立干净 clone `.work/installable-beta/source` 继续同一显式分支 `feat/FEAT-001-core-loop`，起点完整 HEAD 为 `9e240108b193bf415a60942d12ee2ec1043ea0aa`，远端仍为本项目 GitHub。没有重置原工作树或把未验收诊断带入候选。该副本由同一主 Agent 拥有状态写入，后续只有安装交付 worker 写入其约定代码/文档范围；不要求用户重新批准既有 DEC-022 操作。
 
 执行方式：2026-10-21 Manus 阶段无可用子 Agent，T001～T004 内联执行；2026-10-22 由主 Agent 恢复同一 Feature，使用 worker 角色实现 T005～T010，主 Agent 审查差异与命令证据。worker 的实际模型元数据未由工具返回，不能据此声称运行时已核验具体模型。
 
@@ -330,6 +338,14 @@ sequenceDiagram
 - **独立中间审查（`500ec4c`）**：静态发现三项 P2：默认 mode 的 Timer 在菜单跟踪时暂停必要检查；取消长录音只忽略结果而仍解码全部块，阻塞唯一 ASR 队列；AX 坐标以全部屏幕最高边转换，在主屏上方有外屏时选错屏幕。主 Agent 接受三项发现，补充当前有效方案并交同一 worker 修正及回归；此审查未运行测试，不是最终生命周期 review。此前两轮修正已有验收进展，未触发不收敛停止，诊断额度未使用。
 
 ## 验证记录（实际）
+
+### T016 安装候选 smoke 与热键配置更新（2026-10-22）
+
+主 Agent 将候选 DMG 只读挂载，以 `ditto` 复制到此前不存在的 `/Applications/Shanshuo.app`，严格深度签名、版本 `0.1.0/1.0.1` 和可执行文件 SHA-256 均匹配分发包，随后正常卸载。安装版与已授权旧版的 designated requirement 完全一致。通过活动监视器正常退出旧测试 PID34192 后，CUA 启动安装路径；只读进程核对仅 PID73134 运行 `/Applications/Shanshuo.app/Contents/MacOS/Shanshuo`。工具因菜单栏应用无普通窗口而返回连接超时，未据此重复启动或判定挂起；生产 JSONL 已记录实际 cold_start_ready。
+
+正式模型目录原不存在，主 Agent 从既有公开缓存仅复制清单中的六个文件，逐一核对大小与固定 SHA-256 后原子发布，总计 987,015,347 bytes。安装版不再依赖开发 seed。一次启动到 ready 为 9.106562875 秒，超过 5 秒目标，按 DEC-025 保留失败并更新已知问题；没有追加性能优化。以安装的同一二进制、不设置模型路径覆盖，实际执行公开 `zh-001.wav` 的开发 CLI smoke，exit 0，模型加载成功、10.38 秒音频实际解码一块并返回非空文本；这不是麦克风或端到端延迟通过声明。
+
+用户反馈按原右 Option 没有文字，随后说明已在设置中更换热键以避开另一应用冲突。只读配置为 `function`（Fn／🌐）；安装进程已有真实热键、采集、识别交付与 paste_requested 事件，但终态 unverified 不能证明插入成功。已聚焦确认用户用新热键时的实际结果；在结果明确前不改回快捷键、不重做设置页诊断，也不把此轮实机插入写成通过。
 
 尚未开始。
 
@@ -517,3 +533,15 @@ worker 返回 `20261022-165625`，生产 `ApplicationMainMenu` 增加 nil-target
 主 Agent 复核固定类型数据、pass-through local monitor、可见窗口身份、弱引用与关窗代次、strict reader 和独立 probe 分母隔离，接受该诊断实现。完整非 ASR 测试在 `183733` exit 0；随后 Caps Lock 假阴性修正通过纯分类/native-window harness、formatter、diff 和签名 build `184152`。冻结副本签名复核 exit 0，SHA-256 为 `b360dd19ddeb50cda7fe814b0d116ea3d4ae65a0c3f73e95048d50c6fbad41cc`。实际新 reader 读取 227 条生产记录、invalid=0。未主动移动焦点或修正 key-view loop，不据此声明键盘通过。
 
 旧应用已通过其退出菜单关闭；新冻结应用 PID34192 已内部 ready，但没有普通窗口，CUA 连接超时，已请求用户从菜单栏打开设置并实际 Tab/Shift-Tab。同次启动按预先声明执行精确进程的只读 2 秒 sample，exit 0，捕获菜单/WritingTools 动态装载与音频 inputNode 初始化路径；5.911846209 秒带采样的 start→ready 不作无采样性能达标证据。旧 5.500070708 秒失败保留。只读冷启动分析确认重复 prepare 与最后音频 ready 的轮询观测滞后路径，尚不能分配真实耗时。详见 `docs/validation/native-system-184152.md`；T015 仍 in_progress。
+
+### T016 v0.1.0-beta.1 可安装测试版打包（worker 实现，待主 Agent 验收，2026-10-22）
+
+- **可重复构建与签名边界**：`scripts/build.sh` 默认生成 ad-hoc 开发构建；`CONFIG=release` 必须显式提供已有的 `Shanshuo Test Signing` keychain 和密码文件，并固定使用该 identity。缺失配置会以 exit 2 失败，绝不降级为 ad-hoc release。vendor cache 仅从显式 `SHANSHUO_VENDOR_CACHE` 读取，不写入 bundle。release `Info.plist` 为 `CFBundleShortVersionString=0.1.0`、`CFBundleVersion=1.0.1`，另存 UTC `ShanshuoBuildTimestamp`；不含 `ShanshuoDevModelDir`、测试注入或模型权重。
+- **产物内容**：签名前已将 `LICENSE`、`THIRD_PARTY_NOTICES.md` 和 17 个 `licenses/*` 文件放进 `Shanshuo.app/Contents/Resources`。`scripts/release/create_beta.sh` 只清理自己的 staging/output，生成 arm64 ZIP、含 `Applications` 拖放链接的 DMG 与 SHA256 清单。包内保留 `docs/` 的安装、已知问题、发布说明、兼容性和引用的 ASR 验证/benchmark 文件，以及根目录 `licenses/`，使 Markdown 的相对链接在 ZIP/DMG 中仍可解析；`verify_document_links.py` 只检查相对 Markdown 链接。
+- **本次验证**：默认 ad-hoc 构建 exit 0；显式 release signing 缺失配置的拒绝检查 exit 0（被测 build 退出 2，未生成 app）；带项目现有测试 identity 的 `bash scripts/release/create_beta.sh` exit 0。后者验证严格深度签名、Hardened Runtime、audio-input entitlement、arm64、仅系统动态库、无开发模型键/私有源码路径/模型权重，并对 ZIP 解包和只读挂载的 DMG 分别运行 bundle 与 Markdown-link 检查，最后正常 detach。`SKIP_ASR=1 bash scripts/test.sh` 在最终打包源码上 exit 0（13 个 Swift 单元测试及所有既有 harness）；ASR 输入和实现未改，未重跑 120 条评测。`swift-format lint`、shell syntax、Python 编译和 `git diff --check` 均 exit 0。
+- **候选资产**：`.work/dist/v0.1.0-beta.1/` 中 ZIP 为 9,647,748 bytes，SHA-256 `d152db6f8b66c753ddbe930422af985a0b9460e6316bc015c36778eb71226a8c`；DMG 为 10,710,950 bytes，SHA-256 `5fe47b16a13b8642f81ab1abbca4a24588860cc164ddbc9847157874aae47bc2`。DMG 验证后未保持挂载。
+- **待主 Agent 安装验收**：worker 没有启动候选 app、操作 GUI、授予权限或进行真实麦克风/八应用/M1/VoiceOver/性能验证。该 beta 仍按 DEC-024 披露中文 CER 6.48% 与混说 MER 12.94% 未满足原 NFR-003；MiniMax 仅是 REQ-002 已选方向，尚未接入此包。
+
+### T016 beta 分发文档刷新（worker，待主 Agent 验收，2026-10-22）
+
+主 Agent 在 `/Applications` 的实际安装 smoke 记录首次 cold-start ready 为 9.106562875 秒，已将 `docs/known-issues.md` 的用户可见事实更新为 9.11 秒。worker 没有重编译、重签、启动或修改冻结 app：以既有 staging 内的签名 app 为唯一输入，其 `Contents/MacOS/Shanshuo` SHA-256 在刷新前后及 ZIP 解包/只读 DMG 挂载中均为 `64e43ec79ed67b33087a687c2b21424f93a02f0c48aef04dc5e90dbbb3d2bc38`。仅将更新后的 known-issues 文档复制到 ZIP/DMG staging，重新归档并生成清单；严格 bundle/signature、ZIP/DMG 链接、只读挂载、包内 9.11 秒文本和正常 detach 均通过。新 ZIP SHA-256 为 `ca076935724ebcaf038e5cad62129d223e617500c3b1a24e86554270751bb329`，DMG 为 `d1d281f1b4254ebb4fa7468cf0facbdd701701470577c5f8a541acb769a17753`。
