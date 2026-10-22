@@ -202,15 +202,15 @@
       "depends_on": [
         "REQ-001"
       ],
-      "description": "用 OpenRouter 模型整理口语、口述序号转列表、失败回退、知情开启",
+      "description": "使用用户配置的 MiniMax 直连服务整理口语、序号转列表；低延迟候选待评测，保留失败回退、知情开启及数据保留待决要求",
       "domain": "desktop-voice-input",
       "feature_id": null,
       "id": "REQ-002",
       "priority": "P1",
       "product_context_ref": ".sdlc-v1/context/REQ-002.product.md",
       "status": "captured",
-      "title": "识别文本书面化与结构化整理（OpenRouter）",
-      "updated_at": "2026-10-21T11:25:28Z"
+      "title": "识别文本书面化与结构化整理（MiniMax）",
+      "updated_at": "2026-10-22T10:01:12Z"
     },
     "REQ-003": {
       "created_at": "2026-10-21T11:25:28Z",
