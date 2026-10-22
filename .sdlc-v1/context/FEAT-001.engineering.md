@@ -500,3 +500,7 @@ worker 返回 `20261022-165625`，生产 `ApplicationMainMenu` 增加 nil-target
 用户在 `165625` 实际说公开测试句，确认文字出现且继续按钮可用；生产诊断记录本次 2.285 秒采集、binding 接受、paste observed、outcome target matched 和最终 practice_validation_verified。该 session 在历史中 count=0。引导持久化状态随后八步全部 completed、skipped 为空。完成后的两次 CUA 超时，经过一次最多两分钟、仅本任务 PID 的只读辨别：1 秒 sample 主线程在正常 NSApplication 事件等待，CPU0%，系统设置 CUA 正常且引导已完成，支持窗口关闭解释；未盲目改代码或重启。见 `docs/validation/native-system-165625.md`。
 
 同一新进程真实启动到 ready 为 5.500070708 秒，超过 NFR-006 的 5 秒；旧 `145800` 三次达标不能覆盖它，也未改为平均值通过。新构建及最终发布配置的冷启动仍未通过。其余八应用矩阵、性能与系统质量条件未完成，T015 继续 in_progress。
+
+### T015 设置页与辅助功能的后续真机证据（2026-10-22）
+
+用户打开设置后，CUA 经实际应用菜单取得 `165625` 设置控件及可访问名称。系统“键盘导航”读取为 on，未修改；系统设置的 Tab 对照能把焦点移到搜索框，闪说设置经过 Raise 和标题栏点击后 Tab 仍报告窗口焦点，尚未确定是应用键视图顺序还是工具输入路径，未按猜测改代码或记为通过。已按用户授权临时开启旁白，实际开关 off→on；连接 VoiceOver 的 CUA 调用超时，未得到朗读或操作证据。随后从仍可用的系统设置关闭，实际确认 off。辅助功能键盘此前也已恢复 off。详见 `docs/validation/native-system-165625.md`；键盘与旁白 NFR 仍未通过，T015 未推进。
