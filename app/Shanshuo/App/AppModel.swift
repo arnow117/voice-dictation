@@ -2,7 +2,7 @@ import AppKit
 import Foundation
 import ShanshuoCore
 
-struct AppStatusSnapshot {
+struct AppStatusSnapshot: Equatable {
   let microphonePermission: PermissionStatus
   let accessibilityPermission: PermissionStatus
   let modelStatus: ModelManagerStatus
@@ -14,6 +14,8 @@ struct AppStatusSnapshot {
   let soundEnabled: Bool
   let onboardingProgress: OnboardingProgress
   let historyFailure: HistoryStoreError?
+  let inputDeviceRevision: UInt64
+  let shortcutTestSucceeded: Bool
 
   var modelReady: Bool {
     if case .ready = modelStatus {
@@ -64,6 +66,10 @@ final class AppModel {
   private var shortcutTestSawPress = false
   private var shortcutTestSawRelease = false
   private let selectedInputDeviceKey = "audio.input-device-uid"
+  private var lastPublishedSnapshot: AppStatusSnapshot?
+  private var cachedInputDevices: [InputDevice] = []
+  private var inputDeviceRevision: UInt64 = 0
+  private var audioPreparationSubmitted = false
 
   init(
     permissions: PermissionRequesting,
@@ -106,6 +112,11 @@ final class AppModel {
 
     hotkeys.selectedShortcut = preferredShortcutFromDefaults()
     audioCapture.selectedInputDeviceUID = defaults.string(forKey: selectedInputDeviceKey)
+    if let notifier = audioCapture as? InputDeviceListRefreshNotifying {
+      notifier.onInputDeviceListChanged = { [weak self] in
+        self?.refreshInputDevices()
+      }
+    }
     modelObservation = modelManager.observe { [weak self] _ in
       self?.publish()
     }
@@ -325,7 +336,18 @@ final class AppModel {
   }
 
   func inputDevices() -> [InputDevice] {
-    audioCapture.availableInputDevices
+    cachedInputDevices
+  }
+
+  func refreshInputDevices() {
+    requireMainThread()
+    let devices = audioCapture.availableInputDevices
+    guard devices != cachedInputDevices else {
+      return
+    }
+    cachedInputDevices = devices
+    inputDeviceRevision &+= 1
+    publish()
   }
 
   func selectedInputDeviceUID() -> String? {
@@ -359,6 +381,22 @@ final class AppModel {
     coordinator.endMicrophoneTest()
   }
 
+  func audioPreparationWasSubmitted() {
+    requireMainThread()
+    audioPreparationSubmitted = true
+    publish()
+  }
+
+  var isReadyForFirstDictation: Bool {
+    let currentSnapshot = snapshot()
+    return currentSnapshot.microphonePermission.isAuthorized
+      && currentSnapshot.modelReady
+      && currentSnapshot.isShortcutAvailable
+      && audioCapture.isAvailable
+      && audioPreparationSubmitted
+      && !currentSnapshot.pause.isPaused
+  }
+
   func cancelOnboardingPracticeSession() {
     requireMainThread()
     coordinator.cancelOnboardingPracticeSession()
@@ -383,6 +421,7 @@ final class AppModel {
     requireMainThread()
     shortcutTestSawPress = false
     shortcutTestSawRelease = false
+    publish()
   }
 
   func recordHotkeyEvent(_ shortcut: HoldShortcut, isPressed: Bool) {
@@ -419,13 +458,19 @@ final class AppModel {
       historyEnabled: historyEnabled,
       soundEnabled: soundPreference.isEnabled,
       onboardingProgress: progress,
-      historyFailure: historyFailureState.failure
+      historyFailure: historyFailureState.failure,
+      inputDeviceRevision: inputDeviceRevision,
+      shortcutTestSucceeded: shortcutTestSucceeded
     )
   }
 
   private func publish() {
     requireMainThread()
     let currentSnapshot = snapshot()
+    guard currentSnapshot != lastPublishedSnapshot else {
+      return
+    }
+    lastPublishedSnapshot = currentSnapshot
     for observer in observers.values {
       observer(currentSnapshot)
     }

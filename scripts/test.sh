@@ -22,6 +22,12 @@ bash "$ROOT/scripts/build.sh"
 echo "== coordinator harness"
 bash "$ROOT/tests/integration/run_coordinator_harness.sh"
 
+echo "== performance diagnostics harness"
+bash "$ROOT/tests/integration/run_performance_diagnostics_harness.sh"
+
+echo "== performance metric report tests"
+bash "$ROOT/tests/integration/run_performance_metrics_test.sh"
+
 echo "== hotkey configuration harness"
 bash "$ROOT/tests/integration/run_hotkey_configuration_harness.sh"
 

@@ -41,12 +41,18 @@ protocol AudioCapturing: AnyObject {
   func stop(_ operation: AudioCaptureOperation, completion: @escaping (CapturedAudio) -> Void)
 }
 
+protocol InputDeviceListRefreshNotifying: AnyObject {
+  var onInputDeviceListChanged: (() -> Void)? { get set }
+}
+
 /// The only audio store is this process-memory buffer. Engine prepare/start/stop and tap
 /// installation all run on one serial queue, so a slow cold start cannot block an event-tap
 /// callback on the main thread. Cancellation invalidates the operation under a lock before its
 /// queued cleanup runs, which makes a late start completion stop and discard instead of reviving a
 /// session.
-final class MemoryAudioCapture: AudioCapturing {
+final class MemoryAudioCapture: AudioCapturing, InputDeviceListRefreshNotifying,
+  PerformanceSessionConfiguring
+{
   static let sampleRate = 16_000
   private static let maximumSamples = Int(DictationRules.maximumRecording) * sampleRate
 
@@ -60,6 +66,7 @@ final class MemoryAudioCapture: AudioCapturing {
   private let inputFormatProvider: (() -> InputFormatSignature?)?
   private let configurationConfirmationTimeout: DispatchTimeInterval
   private let prepareEngine: (AVAudioEngine) -> Void
+  private let performanceDiagnostics: PerformanceEventRecording
   private let stateLock = NSLock()
   private var converter: AVAudioConverter?
   private var samples: [Float] = []
@@ -81,6 +88,9 @@ final class MemoryAudioCapture: AudioCapturing {
   private var nextPreparationGeneration: UInt64 = 0
   private var engineConfigurationEpoch: UInt64 = 0
   private var engineInstanceEpoch: UInt64 = 0
+  private var pendingPerformanceSessionID: UUID?
+  private var inputDeviceListChanged: (() -> Void)?
+  private var inputDeviceChangeObserver: SystemInputDeviceChangeObserver?
 
   var onInterruption: ((AudioCaptureOperation) -> Void)? {
     get {
@@ -96,6 +106,19 @@ final class MemoryAudioCapture: AudioCapturing {
   }
   private var interruptionHandler: ((AudioCaptureOperation) -> Void)?
 
+  var onInputDeviceListChanged: (() -> Void)? {
+    get {
+      stateLock.lock()
+      defer { stateLock.unlock() }
+      return inputDeviceListChanged
+    }
+    set {
+      stateLock.lock()
+      inputDeviceListChanged = newValue
+      stateLock.unlock()
+    }
+  }
+
   init(
     engine: AVAudioEngine = AVAudioEngine(),
     engineEvents: AudioEngineEventObserving = SystemAudioEngineEventSource(),
@@ -105,6 +128,7 @@ final class MemoryAudioCapture: AudioCapturing {
     inputFormatProvider: (() -> InputFormatSignature?)? = nil,
     configurationConfirmationTimeout: DispatchTimeInterval = .seconds(2),
     prepareEngine: ((AVAudioEngine) -> Void)? = nil,
+    performanceDiagnostics: PerformanceEventRecording = NoopPerformanceEventRecorder(),
     engineFactory: @escaping () -> AVAudioEngine = { AVAudioEngine() }
   ) {
     self.engine = engine
@@ -126,7 +150,11 @@ final class MemoryAudioCapture: AudioCapturing {
     self.inputFormatProvider = inputFormatProvider
     self.configurationConfirmationTimeout = configurationConfirmationTimeout
     self.prepareEngine = prepareEngine ?? { $0.prepare() }
+    self.performanceDiagnostics = performanceDiagnostics
     installEngineEventObservation()
+    inputDeviceChangeObserver = SystemInputDeviceChangeObserver { [weak self] in
+      self?.notifyInputDeviceListChanged()
+    }
   }
 
   deinit {
@@ -155,12 +183,27 @@ final class MemoryAudioCapture: AudioCapturing {
       let hasActiveOperation = activeOperationIdentifier != nil
       stateLock.unlock()
       if !hasActiveOperation {
+        // A completed preparation proves only its former immutable route. Revoke that proof on
+        // the caller's thread before the replacement ticket reaches the engine queue.
+        markInputPlanUnready()
         prepare()
       }
     }
   }
 
+  func setPerformanceSessionID(_ sessionID: UUID?) {
+    stateLock.lock()
+    pendingPerformanceSessionID = sessionID
+    stateLock.unlock()
+  }
+
   func prepare() {
+    guard !hasActiveOperation() else {
+      return
+    }
+    // `prepare()` is also used for a new idle plan without changing the preference. Do not let an
+    // older ready route satisfy cold-start readiness while this ticket is still queued.
+    markInputPlanUnready()
     let plan = currentInputDevicePlan()
     engineQueue.async { [weak self] in
       guard let self else {
@@ -213,9 +256,12 @@ final class MemoryAudioCapture: AudioCapturing {
     nextOperationIdentifier &+= 1
     let identifier = nextOperationIdentifier
     let inputDevicePlan = InputDeviceSessionPlan(preferredUID: requestedInputDeviceUID)
+    let performanceSessionID = pendingPerformanceSessionID
+    pendingPerformanceSessionID = nil
     let operation = MemoryAudioCaptureOperation(
       identifier: identifier,
       inputDevicePlan: inputDevicePlan,
+      performanceSessionID: performanceSessionID,
       capture: self
     )
     activeOperationIdentifier = identifier
@@ -337,14 +383,30 @@ final class MemoryAudioCapture: AudioCapturing {
       try engine.start()
     } catch {
       stopEngineOnEngineQueue()
+      if let sessionID = operation.consumeEngineStartOutcomeSessionID(succeeded: false) {
+        performanceDiagnostics.record(
+          kind: .audioEngineStarted,
+          result: .failed,
+          sessionID: sessionID
+        )
+      }
       markInputPlanUnready()
       completeStart(
         operation, result: .failure(AudioCaptureError.failedToStart), completion: completion)
       return
     }
 
+    if let sessionID = operation.consumeEngineStartOutcomeSessionID(succeeded: true) {
+      performanceDiagnostics.record(
+        kind: .audioEngineStarted,
+        result: .succeeded,
+        sessionID: sessionID
+      )
+    }
+
     guard isCurrent(operation) else {
       stopEngineOnEngineQueue()
+      recordStoppedEngine(for: operation, audioDuration: nil)
       return
     }
     completeStart(operation, result: .success(()), completion: completion)
@@ -371,6 +433,7 @@ final class MemoryAudioCapture: AudioCapturing {
     activeOperationIdentifier = nil
     activeOperation = nil
     stateLock.unlock()
+    recordStoppedEngine(for: operation, audioDuration: audio.duration)
     return audio
   }
 
@@ -380,6 +443,7 @@ final class MemoryAudioCapture: AudioCapturing {
       stateLock.unlock()
       return
     }
+    let operation = activeOperation
     activeOperationIdentifier = nil
     activeOperation = nil
     isRunning = false
@@ -394,6 +458,9 @@ final class MemoryAudioCapture: AudioCapturing {
       }
       self.discardPendingPreparation(for: operationIdentifier)
       self.stopEngineOnEngineQueue()
+      if let operation {
+        self.recordStoppedEngine(for: operation, audioDuration: nil)
+      }
     }
   }
 
@@ -450,7 +517,16 @@ final class MemoryAudioCapture: AudioCapturing {
     let values = UnsafeBufferPointer(start: channel, count: Int(outputBuffer.frameLength))
     appendSamplesLocked(Array(values))
     let peak = values.reduce(Float.zero) { max($0, abs($1)) }
+    let firstBufferSessionID = operation.consumeFirstBufferSessionID()
     stateLock.unlock()
+
+    if let firstBufferSessionID {
+      performanceDiagnostics.record(
+        kind: .audioFirstBuffer,
+        result: .observed,
+        sessionID: firstBufferSessionID
+      )
+    }
 
     DispatchQueue.main.async { [weak self, weak operation] in
       guard let self, let operation, self.isCurrent(operation) else {
@@ -472,6 +548,21 @@ final class MemoryAudioCapture: AudioCapturing {
       tapIsInstalled = false
     }
     engine.stop()
+  }
+
+  private func recordStoppedEngine(
+    for operation: MemoryAudioCaptureOperation,
+    audioDuration: TimeInterval?
+  ) {
+    guard let sessionID = operation.consumeEngineStoppedSessionID() else {
+      return
+    }
+    performanceDiagnostics.record(
+      kind: .audioStopped,
+      result: .succeeded,
+      sessionID: sessionID,
+      audioDuration: audioDuration
+    )
   }
 
   private func installEngineEventObservation() {
@@ -514,9 +605,19 @@ final class MemoryAudioCapture: AudioCapturing {
     beginPreparation(for: currentInputDevicePlan(), operationIdentifier: nil, completion: nil)
   }
 
+  private func notifyInputDeviceListChanged() {
+    let handler = onInputDeviceListChanged
+    DispatchQueue.main.async {
+      handler?()
+    }
+  }
+
   private func interruptActiveOperationOnEngineQueue() {
     let interruptedOperation = invalidateActiveOperation()
     stopEngineOnEngineQueue()
+    if let interruptedOperation {
+      recordStoppedEngine(for: interruptedOperation, audioDuration: nil)
+    }
     markInputPlanUnready()
 
     guard let interruptedOperation else {
@@ -575,6 +676,10 @@ final class MemoryAudioCapture: AudioCapturing {
       completion?(false)
       return
     }
+
+    // This call supersedes a prior idle plan. The new ticket is the only path that may publish
+    // readiness, even when route resolution or device configuration fails.
+    markInputPlanUnready()
 
     if activePreparation != nil {
       guard
@@ -853,6 +958,43 @@ final class MemoryAudioCapture: AudioCapturing {
   }
 }
 
+/// Observes real CoreAudio device-list changes. AVAudioEngine configuration notifications are not
+/// used for this purpose because the app's own route preparation can produce them.
+private final class SystemInputDeviceChangeObserver {
+  private var address = AudioObjectPropertyAddress(
+    mSelector: kAudioHardwarePropertyDevices,
+    mScope: kAudioObjectPropertyScopeGlobal,
+    mElement: kAudioObjectPropertyElementMain
+  )
+  private let listener: AudioObjectPropertyListenerBlock
+  private let isInstalled: Bool
+
+  init(onChange: @escaping () -> Void) {
+    listener = { _, _ in
+      onChange()
+    }
+    let result = AudioObjectAddPropertyListenerBlock(
+      AudioObjectID(kAudioObjectSystemObject),
+      &address,
+      DispatchQueue.main,
+      listener
+    )
+    isInstalled = result == noErr
+  }
+
+  deinit {
+    guard isInstalled else {
+      return
+    }
+    AudioObjectRemovePropertyListenerBlock(
+      AudioObjectID(kAudioObjectSystemObject),
+      &address,
+      DispatchQueue.main,
+      listener
+    )
+  }
+}
+
 /// The production adapter changes only this process's AVAudioEngine input unit. It resolves the
 /// system default per operation, so the next recording follows an OS default change without moving
 /// an active capture or changing the OS default itself.
@@ -1093,12 +1235,57 @@ private struct PendingPreparation {
 private final class MemoryAudioCaptureOperation: AudioCaptureOperation {
   let identifier: UInt64
   let inputDevicePlan: InputDeviceSessionPlan
+  private let performanceSessionID: UUID?
+  private let performanceLock = NSLock()
+  private var didObserveFirstBuffer = false
+  private var didObserveEngineStartOutcome = false
+  private var engineDidStart = false
+  private var didObserveEngineStop = false
   private weak var capture: MemoryAudioCapture?
 
-  init(identifier: UInt64, inputDevicePlan: InputDeviceSessionPlan, capture: MemoryAudioCapture) {
+  init(
+    identifier: UInt64,
+    inputDevicePlan: InputDeviceSessionPlan,
+    performanceSessionID: UUID?,
+    capture: MemoryAudioCapture
+  ) {
     self.identifier = identifier
     self.inputDevicePlan = inputDevicePlan
+    self.performanceSessionID = performanceSessionID
     self.capture = capture
+  }
+
+  func consumeFirstBufferSessionID() -> UUID? {
+    performanceLock.lock()
+    defer { performanceLock.unlock() }
+    guard !didObserveFirstBuffer else {
+      return nil
+    }
+    didObserveFirstBuffer = true
+    return performanceSessionID
+  }
+
+  /// Called on the engine queue immediately after `AVAudioEngine.start()` returns or throws.
+  /// The coordinator's main-thread completion is intentionally not a substitute for this fact.
+  func consumeEngineStartOutcomeSessionID(succeeded: Bool) -> UUID? {
+    performanceLock.lock()
+    defer { performanceLock.unlock() }
+    guard !didObserveEngineStartOutcome else {
+      return nil
+    }
+    didObserveEngineStartOutcome = true
+    engineDidStart = succeeded
+    return performanceSessionID
+  }
+
+  func consumeEngineStoppedSessionID() -> UUID? {
+    performanceLock.lock()
+    defer { performanceLock.unlock() }
+    guard engineDidStart, !didObserveEngineStop else {
+      return nil
+    }
+    didObserveEngineStop = true
+    return performanceSessionID
   }
 
   func cancel() {

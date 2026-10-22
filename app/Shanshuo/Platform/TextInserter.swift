@@ -65,7 +65,7 @@ protocol ClipboardControlling: AnyObject {
 
 /// Direct text input with live security/focus validation. The returned operation owns every delayed
 /// paste action, so the coordinator can cancel it before it posts input or changes the clipboard.
-final class SystemTextInserter: TextInserting {
+final class SystemTextInserter: TextInserting, PerformanceSessionConfiguring {
   private static let terminalBundleIdentifiers: Set<String> = [
     "com.apple.Terminal",
     "com.googlecode.iterm2",
@@ -80,6 +80,8 @@ final class SystemTextInserter: TextInserting {
   private let scheduler: TextInsertionScheduling
   private let eventPoster: TextEventPosting
   private let secureInputActive: () -> Bool
+  private let performanceDiagnostics: PerformanceEventRecording
+  private var performanceSessionID: UUID?
 
   init(
     permissions: PermissionProviding,
@@ -87,7 +89,8 @@ final class SystemTextInserter: TextInserting {
     clipboard: ClipboardControlling = SystemClipboard(),
     scheduler: TextInsertionScheduling = MainTextInsertionScheduler(),
     eventPoster: TextEventPosting = SystemTextEventPoster(),
-    secureInputActive: @escaping () -> Bool = { IsSecureEventInputEnabled() }
+    secureInputActive: @escaping () -> Bool = { IsSecureEventInputEnabled() },
+    performanceDiagnostics: PerformanceEventRecording = NoopPerformanceEventRecorder()
   ) {
     self.permissions = permissions
     self.focusInspector = focusInspector
@@ -95,6 +98,11 @@ final class SystemTextInserter: TextInserting {
     self.scheduler = scheduler
     self.eventPoster = eventPoster
     self.secureInputActive = secureInputActive
+    self.performanceDiagnostics = performanceDiagnostics
+  }
+
+  func setPerformanceSessionID(_ sessionID: UUID?) {
+    performanceSessionID = sessionID
   }
 
   @discardableResult
@@ -104,6 +112,7 @@ final class SystemTextInserter: TextInserting {
     completion: @escaping (TextInsertionResult) -> Void
   ) -> TextInsertionOperation {
     let operation = ManagedTextInsertionOperation(completion: completion)
+    let sessionID = performanceSessionID
     guard !text.isEmpty else {
       operation.complete(.discarded("没有听到声音"))
       return operation
@@ -111,14 +120,19 @@ final class SystemTextInserter: TextInserting {
 
     let current = focusInspector.snapshot()
     guard directInsertionIsStillAllowed(expectedTarget, current: current) else {
-      copyOrDiscard(text, operation: operation)
+      copyOrDiscard(text, sessionID: sessionID, operation: operation)
       return operation
     }
 
     if let bundleIdentifier = current.target.bundleIdentifier,
       Self.terminalBundleIdentifiers.contains(bundleIdentifier)
     {
-      typeIntoTerminalOrCopy(text, expectedTarget: expectedTarget, operation: operation)
+      typeIntoTerminalOrCopy(
+        text,
+        expectedTarget: expectedTarget,
+        sessionID: sessionID,
+        operation: operation
+      )
       return operation
     }
 
@@ -127,11 +141,22 @@ final class SystemTextInserter: TextInserting {
       let element = current.element,
       SystemFocusInspector.isAttributeSettable(element, kAXSelectedTextAttribute as String)
     {
-      attemptAXInsertion(text, target: current, element: element, operation: operation)
+      attemptAXInsertion(
+        text,
+        target: current,
+        element: element,
+        sessionID: sessionID,
+        operation: operation
+      )
       return operation
     }
 
-    pasteAndRestore(text, expectedTarget: expectedTarget, operation: operation)
+    pasteAndRestore(
+      text,
+      expectedTarget: expectedTarget,
+      sessionID: sessionID,
+      operation: operation
+    )
     return operation
   }
 
@@ -141,7 +166,7 @@ final class SystemTextInserter: TextInserting {
     completion: @escaping (TextInsertionResult) -> Void
   ) -> TextInsertionOperation {
     let operation = ManagedTextInsertionOperation(completion: completion)
-    copyOrDiscard(text, operation: operation)
+    copyOrDiscard(text, sessionID: performanceSessionID, operation: operation)
     return operation
   }
 
@@ -149,6 +174,7 @@ final class SystemTextInserter: TextInserting {
     _ text: String,
     target: SystemFocusSnapshot,
     element: AXUIElement,
+    sessionID: UUID?,
     operation: ManagedTextInsertionOperation
   ) {
     guard operation.isActive else {
@@ -160,7 +186,12 @@ final class SystemTextInserter: TextInserting {
       text as CFString
     )
     guard writeResult == .success else {
-      pasteAndRestore(text, expectedTarget: target, operation: operation)
+      pasteAndRestore(
+        text,
+        expectedTarget: target,
+        sessionID: sessionID,
+        operation: operation
+      )
       return
     }
 
@@ -175,6 +206,8 @@ final class SystemTextInserter: TextInserting {
     }
 
     let insertedAt = Date()
+    recordPerformanceEvent(
+      kind: .axReadbackVerified, result: .verifiedInsertion, sessionID: sessionID)
     operation.complete(
       .inserted(
         InsertionReceipt(
@@ -206,7 +239,11 @@ final class SystemTextInserter: TextInserting {
     directInsertionIsStillAllowed(expectedTarget, current: focusInspector.snapshot())
   }
 
-  private func copyOrDiscard(_ text: String, operation: ManagedTextInsertionOperation) {
+  private func copyOrDiscard(
+    _ text: String,
+    sessionID: UUID?,
+    operation: ManagedTextInsertionOperation
+  ) {
     guard operation.isActive else {
       return
     }
@@ -217,12 +254,18 @@ final class SystemTextInserter: TextInserting {
     }
 
     let didWrite = clipboard.writeText(text)
+    recordPerformanceEvent(
+      kind: .copyCompleted,
+      result: didWrite ? .copied : .failed,
+      sessionID: sessionID
+    )
     operation.complete(didWrite ? .copied("已复制，按 ⌘V 粘贴") : .unverified("无法写入剪贴板"))
   }
 
   private func pasteAndRestore(
     _ text: String,
     expectedTarget: SystemFocusSnapshot,
+    sessionID: UUID?,
     operation: ManagedTextInsertionOperation
   ) {
     let originalClipboard = clipboard.snapshot()
@@ -245,7 +288,7 @@ final class SystemTextInserter: TextInserting {
         operation.add(callback)
       })
     guard let ownedChangeCount = didWriteTemporaryText else {
-      copyOrDiscard(text, operation: operation)
+      copyOrDiscard(text, sessionID: sessionID, operation: operation)
       return
     }
     temporaryChangeCount = ownedChangeCount
@@ -267,10 +310,11 @@ final class SystemTextInserter: TextInserting {
         return
       }
       guard self.directInsertionIsStillAllowed(expectedTarget) else {
-        self.copyOrDiscard(text, operation: operation)
+        self.copyOrDiscard(text, sessionID: sessionID, operation: operation)
         return
       }
       operation.didPostPaste = true
+      self.recordPerformanceEvent(kind: .pasteRequested, result: .requested, sessionID: sessionID)
       self.eventPoster.postPaste()
     }
     operation.add(pasteWork)
@@ -302,19 +346,32 @@ final class SystemTextInserter: TextInserting {
   private func typeIntoTerminalOrCopy(
     _ text: String,
     expectedTarget: SystemFocusSnapshot,
+    sessionID: UUID?,
     operation: ManagedTextInsertionOperation
   ) {
     guard !text.contains("\n"), !text.contains("\r") else {
-      copyOrDiscard(text, operation: operation)
+      copyOrDiscard(text, sessionID: sessionID, operation: operation)
       return
     }
     guard directInsertionIsStillAllowed(expectedTarget), operation.isActive else {
-      copyOrDiscard(text, operation: operation)
+      copyOrDiscard(text, sessionID: sessionID, operation: operation)
       return
     }
 
+    recordPerformanceEvent(kind: .unicodeRequested, result: .requested, sessionID: sessionID)
     eventPoster.postUnicode(text)
     operation.complete(.unverified("已发送文本，终端无法验证插入结果"))
+  }
+
+  private func recordPerformanceEvent(
+    kind: PerformanceEventKind,
+    result: PerformanceEventResult,
+    sessionID: UUID?
+  ) {
+    guard let sessionID else {
+      return
+    }
+    performanceDiagnostics.record(kind: kind, result: result, sessionID: sessionID)
   }
 }
 

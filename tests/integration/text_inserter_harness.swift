@@ -138,12 +138,43 @@ private final class FakeEventPoster: TextEventPosting {
   }
 }
 
+private final class FakePerformanceRecorder: PerformanceEventRecording {
+  let processID = UUID()
+  private var nextTimestamp: UInt64 = 0
+  private(set) var events: [PerformanceDiagnosticEvent] = []
+
+  func now() -> MonotonicTimestamp {
+    nextTimestamp &+= 1
+    return MonotonicTimestamp(nanoseconds: nextTimestamp)
+  }
+
+  func record(
+    kind: PerformanceEventKind,
+    result: PerformanceEventResult,
+    sessionID: UUID,
+    timestamp: MonotonicTimestamp,
+    audioDuration: TimeInterval?
+  ) {
+    events.append(
+      PerformanceDiagnosticEvent(
+        kind: kind,
+        result: result,
+        processID: processID,
+        sessionID: sessionID,
+        timestamp: timestamp,
+        audioDuration: audioDuration
+      )
+    )
+  }
+}
+
 private struct Harness {
   let permissions = FakePermissions()
   let focus: FakeFocus
   let clipboard: FakeClipboard
   let scheduler = ManualTextInsertionScheduler()
   let poster = FakeEventPoster()
+  let performanceRecorder = FakePerformanceRecorder()
   let inserter: SystemTextInserter
   let target: SystemFocusSnapshot
 
@@ -171,7 +202,8 @@ private struct Harness {
       clipboard: clipboard,
       scheduler: scheduler,
       eventPoster: poster,
-      secureInputActive: { false }
+      secureInputActive: { false },
+      performanceDiagnostics: performanceRecorder
     )
   }
 }
@@ -196,6 +228,40 @@ private func testCancellationBeforePostRestoresOwnedClipboard() {
   check(harness.poster.pastePosts == 0, "cancel before delayed paste must not post Command-V")
   check(harness.clipboard.snapshot() == original, "cancel restores the owned multi-type clipboard")
   check(results.isEmpty, "cancelled insertion must not report a result")
+}
+
+private func testPerformanceEventsDescribeOnlyCompletedOrRequestedActions() {
+  let harness = Harness()
+  let copySessionID = UUID()
+  harness.inserter.setPerformanceSessionID(copySessionID)
+  _ = harness.inserter.copy("copy this") { _ in }
+  check(
+    harness.performanceRecorder.events.contains {
+      $0.kind == .copyCompleted
+        && $0.result == .copied
+        && $0.sessionID == copySessionID
+    },
+    "the production inserter records clipboard completion after its real write"
+  )
+
+  let pasteSessionID = UUID()
+  harness.inserter.setPerformanceSessionID(pasteSessionID)
+  _ = harness.inserter.insert("request paste", expectedTarget: harness.target) { _ in }
+  harness.scheduler.advance(to: 0.03)
+  check(
+    harness.performanceRecorder.events.contains {
+      $0.kind == .pasteRequested
+        && $0.result == .requested
+        && $0.sessionID == pasteSessionID
+    },
+    "the production inserter records Command-V as a request"
+  )
+  check(
+    !harness.performanceRecorder.events.contains {
+      $0.kind == .pasteRequested && $0.result == .verifiedInsertion
+    },
+    "a requested paste never claims verified insertion"
+  )
 }
 
 private func testCancellationAfterPostStopsTimeoutFallback() {
@@ -334,6 +400,7 @@ private func testEscapeInterceptionSnapshotsCurrentState() {
 enum TextInserterHarnessMain {
   static func main() {
     testCancellationBeforePostRestoresOwnedClipboard()
+    testPerformanceEventsDescribeOnlyCompletedOrRequestedActions()
     testCancellationAfterPostStopsTimeoutFallback()
     testSecureCancellationCannotResumeAfterLeavingSecureInput()
     testNoReadTimeoutRestoresRatherThanClaimingCopy()

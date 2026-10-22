@@ -17,6 +17,10 @@ enum Paths {
     appSupport.appendingPathComponent("History", isDirectory: true)
   }
 
+  static var performanceDiagnosticsDirectory: URL {
+    appSupport.appendingPathComponent("PerformanceDiagnostics", isDirectory: true)
+  }
+
   /// Development and test overrides are deliberately read-only seeds. T012 can load a verified
   /// seed for local development, but delete/repair always target `ownedModelDirectory`.
   static var readOnlyModelSeedDirectory: URL? {

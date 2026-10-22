@@ -11,6 +11,8 @@ mkdir -p "$CLANG_MODULE_CACHE_PATH"
 swiftc -swift-version 5 -target arm64-apple-macos14.0 \
   -framework AVFoundation -framework AudioToolbox -framework CoreAudio \
   -I "$MAIN/.work/build/obj" -L "$MAIN/.work/build/obj" -lShanshuoCore \
+  "$ROOT/app/Shanshuo/App/Paths.swift" \
+  "$ROOT/app/Shanshuo/Performance/PerformanceDiagnostics.swift" \
   "$ROOT/app/Shanshuo/Platform/AudioEngineEvents.swift" \
   "$ROOT/app/Shanshuo/Platform/InputDeviceSelection.swift" \
   "$ROOT/app/Shanshuo/Platform/QueuedAudioOperationLease.swift" \

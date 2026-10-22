@@ -61,6 +61,9 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate, NS
     configureWindow()
     observation = model.observe { [weak self] snapshot in
       self?.snapshot = snapshot
+      guard self?.window?.isVisible == true else {
+        return
+      }
       self?.render()
     }
     outcomeObservation = model.observeSessionOutcome { [weak self] outcome in
@@ -89,10 +92,13 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate, NS
     currentStep = model.onboardingProgress().firstIncomplete()
     model.visit(currentStep)
     enterCurrentStep()
-    render()
     super.showWindow(sender)
     window?.makeKeyAndOrderFront(nil)
     NSApp.activate(ignoringOtherApps: true)
+    if currentStep == .microphoneTest {
+      model.refreshInputDevices()
+    }
+    render()
   }
 
   func windowWillClose(_ notification: Notification) {
@@ -214,7 +220,7 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate, NS
   }
 
   private func render() {
-    guard let snapshot else {
+    guard let snapshot, window?.isVisible == true else {
       return
     }
     titleLabel.stringValue = "\(currentStep.title)（\(stepPosition(currentStep))/8）"
@@ -726,6 +732,7 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate, NS
 
   func menuWillOpen(_ menu: NSMenu) {
     if menu == inputDevicePopup.menu {
+      model.refreshInputDevices()
       inputDeviceMenuIsTracking = true
     }
   }

@@ -28,9 +28,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private var workspaceObservers: [NSObjectProtocol] = []
   private var distributedObservers: [NSObjectProtocol] = []
 
+  private let performanceDiagnostics = LocalPerformanceDiagnostics()
+  private let processStartSessionID = UUID()
   private let permissions = SystemPermissionService()
   private let focusInspector = SystemFocusInspector()
-  private let audioCapture = MemoryAudioCapture()
+  private lazy var audioCapture = MemoryAudioCapture(
+    performanceDiagnostics: performanceDiagnostics
+  )
   private let hotkeys = SystemHotkeyMonitor()
   private let soundPlayer = SystemRecordingSoundPlayer()
   private var recognizer: Qwen3ASRService!
@@ -43,8 +47,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private var settingsWindowController: SettingsWindowController?
   private var appModel: AppModel?
   private var modelObservation: UUID?
+  private var didRecordColdStartReady = false
 
   func applicationDidFinishLaunching(_ notification: Notification) {
+    if let processStartTimestamp = ProcessStartTimestamp.currentProcess() {
+      performanceDiagnostics.record(
+        kind: .processStarted,
+        result: .observed,
+        sessionID: processStartSessionID,
+        timestamp: processStartTimestamp,
+        audioDuration: nil
+      )
+    }
     statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     guard let statusButton = statusItem.button else {
       return
@@ -63,7 +77,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       }
     )
     recognizer = Qwen3ASRService()
-    let inserter = SystemTextInserter(permissions: permissions, focusInspector: focusInspector)
+    let inserter = SystemTextInserter(
+      permissions: permissions,
+      focusInspector: focusInspector,
+      performanceDiagnostics: performanceDiagnostics
+    )
     coordinator = DictationCoordinator(
       permissions: permissions,
       focusInspector: focusInspector,
@@ -72,6 +90,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       recognizer: recognizer,
       textInserter: inserter,
       hotkeys: hotkeys,
+      performanceDiagnostics: performanceDiagnostics,
       onSessionOutcome: { [weak self] outcome in
         self?.appModel?.handleSessionOutcome(outcome)
       }
@@ -91,6 +110,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     installSystemObservers()
     refreshSystemState()
     coordinator.prepareAudio()
+    appModel?.audioPreparationWasSubmitted()
+    recordColdStartReadyIfNeeded()
     DispatchQueue.main.async { [weak self] in
       self?.openOnboardingIfNeeded()
     }
@@ -110,6 +131,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     if let modelObservation {
       modelManager?.removeObserver(modelObservation)
     }
+    performanceDiagnostics.flush()
   }
 
   private func makeMenu() -> NSMenu {
@@ -279,6 +301,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       pauseUntilManualItem.isHidden = !pauseMenu.showPauseUntilManualResume
       resumeItem.isHidden = !pauseMenu.showResume
     }
+    recordColdStartReadyIfNeeded()
+  }
+
+  private func recordColdStartReadyIfNeeded() {
+    guard !didRecordColdStartReady,
+      let appModel,
+      appModel.isReadyForFirstDictation
+    else {
+      return
+    }
+    didRecordColdStartReady = true
+    performanceDiagnostics.record(
+      kind: .coldStartReady,
+      result: .ready,
+      sessionID: processStartSessionID
+    )
   }
 
   private func installSystemObservers() {

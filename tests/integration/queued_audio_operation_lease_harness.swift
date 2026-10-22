@@ -16,6 +16,34 @@ private final class NoopAudioEngineEventSource: AudioEngineEventObserving {
   }
 }
 
+private final class RecordingPerformanceDiagnostics: PerformanceEventRecording {
+  let processID = UUID()
+  private(set) var events: [PerformanceDiagnosticEvent] = []
+
+  func now() -> MonotonicTimestamp {
+    MonotonicTimestamp(nanoseconds: 0)
+  }
+
+  func record(
+    kind: PerformanceEventKind,
+    result: PerformanceEventResult,
+    sessionID: UUID,
+    timestamp: MonotonicTimestamp,
+    audioDuration: TimeInterval?
+  ) {
+    events.append(
+      PerformanceDiagnosticEvent(
+        kind: kind,
+        result: result,
+        processID: processID,
+        sessionID: sessionID,
+        timestamp: timestamp,
+        audioDuration: audioDuration
+      )
+    )
+  }
+}
+
 private final class ControlledAudioEngineEventSource: AudioEngineEventObserving {
   private var handlers: [UUID: () -> Void] = [:]
   private var observationOrder: [UUID] = []
@@ -234,6 +262,7 @@ enum QueuedAudioOperationLeaseHarness {
     testQueuedPreparationKeepsResolvedRoute()
     testTimedOutEngineIgnoresLateRouteEvent()
     testAvailabilityRequiresCompletedPreparation()
+    testReadyRouteIsRevokedBeforeReplacementPreparation()
     testQueuedOperationOwnership()
     print("queued audio operation lease harness passed")
   }
@@ -273,13 +302,16 @@ enum QueuedAudioOperationLeaseHarness {
   private static func testQueuedOperationOwnership() {
     let engineQueue = DispatchQueue(label: "shanshuo.actual-memory-audio-capture-test")
     let configurator = UnavailableInputDeviceConfigurator()
+    let performanceDiagnostics = RecordingPerformanceDiagnostics()
     let capture = MemoryAudioCapture(
       engineEvents: NoopAudioEngineEventSource(),
       inputDeviceConfigurator: configurator,
       engineQueue: engineQueue,
       availabilityProvider: { false },
-      inputFormatProvider: { nil }
+      inputFormatProvider: { nil },
+      performanceDiagnostics: performanceDiagnostics
     )
+    capture.setPerformanceSessionID(UUID())
 
     engineQueue.suspend()
 
@@ -322,6 +354,10 @@ enum QueuedAudioOperationLeaseHarness {
     check(
       configurator.defaultLookupCount == 1 && configurator.applyCount == 0,
       "unavailable adapter prevents engine input setup and microphone capture"
+    )
+    check(
+      performanceDiagnostics.events.isEmpty,
+      "actual MemoryAudioCapture does not claim an engine fact from a queued callback when engine start never ran"
     )
     check(
       waitForMainQueue({ releasedCallerOperation == nil }),
@@ -698,6 +734,42 @@ enum QueuedAudioOperationLeaseHarness {
     check(
       !mismatchCapture.isAvailable,
       "a physically valid but wrong input route never publishes ready"
+    )
+  }
+
+  private static func testReadyRouteIsRevokedBeforeReplacementPreparation() {
+    let engineQueue = DispatchQueue(label: "shanshuo.ready-route-revocation-test")
+    let eventSource = ControlledAudioEngineEventSource()
+    let configurator = RouteChangingInputDeviceConfigurator(
+      eventSource: eventSource,
+      configurationEventDelay: .seconds(5),
+      currentDeviceID: 10
+    )
+    let capture = MemoryAudioCapture(
+      engineEvents: eventSource,
+      inputDeviceConfigurator: configurator,
+      engineQueue: engineQueue,
+      availabilityProvider: { true },
+      inputFormatProvider: { InputFormatSignature(sampleRate: 48_000, channelCount: 1) },
+      configurationConfirmationTimeout: .milliseconds(40),
+      prepareEngine: { _ in }
+    )
+
+    capture.prepare()
+    check(
+      waitForMainQueue({ capture.isAvailable }),
+      "the completed A route publishes readiness before a replacement is requested"
+    )
+
+    capture.selectedInputDeviceUID = "second"
+    check(
+      !capture.isAvailable,
+      "selecting B synchronously revokes A readiness before B's ticket can run"
+    )
+    runMainLoop(for: 0.08)
+    check(
+      !capture.isAvailable,
+      "a timed-out B preparation never restores stale A readiness"
     )
   }
 }

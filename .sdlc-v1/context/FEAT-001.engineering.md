@@ -118,10 +118,12 @@ flowchart LR
 - 公共源码构建不依赖发布私钥或本机绝对路径。开发者可选择自己的签名身份或 ad-hoc 构建；发布资产使用已有测试签名身份，并附全部许可。release 配置不携带开发模型路径、测试注入或私人数据。源码公开与发布授权见 REQ-001 DEC-022，未改变产品质量阈值。
 - 首个公开测试版的准确率范围按 REQ-001 DEC-024：接受已公开实测的中文 6.48% 与混说 12.94% 限制，原定 NFR-003 保持未通过；英文 6.03% 达标。其他隐私、安全、兼容性和质量要求继续验证，不由准确率例外推导额外豁免。
 - 首个公开候选版本按 `v0.1.0-beta.1` 准备，应用版本 `0.1.0`；构建号使用合法数字版本，时间戳另存，不能继续把带连字符的日期当作 CFBundleVersion。分发产物为 .app 的 ZIP、DMG 和 SHA-256 清单，包含自有及第三方许可。安装说明如实说明自签名、未公证及系统的首次打开步骤，不修改全局 Gatekeeper 或绕过证书检查。版本键规则参见 [Apple Core Foundation Keys](https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html)。
+- T016 的 bundle build number 采用三个数字段并校验宽度（首段 1～4 位且大于零，后两段各 1～2 位）；首个候选可用 `1.0.1`，完整时间另存 `ShanshuoBuildTimestamp` 供界面/报告识别。不能简单移除时间戳连字符而生成超长首段。公共 clone 默认允许 ad-hoc 或调用者自己的签名；发布过程明确选择既有测试身份，缺失身份必须失败而非悄悄降级。源码构建与发布目录输出均与私人模型、签名缓存隔离。
 - 实现期间的单元、集成与模拟系统证据不替代 T015 的真机、权限、性能和兼容性验证；所有环境缺口与未测项目显式记录，最终验证不得将其算作通过。
 - T015 通过少量本地类型化事件观测真实生产路径：随机 attempt/session ID、固定事件/结果枚举、单调时钟和必要音频时长；接口不接收转写、窗口标题、剪贴板内容、任意错误字符串或完整路径，不上传诊断。分别记录热键回调、AppKit 显示提交、实际采集/停止、识别交付、AX 读回验证、复制与未验证粘贴；失败/取消也计入分母。`display()/isVisible` 不是屏幕首帧，`.unverified` 不是实际插入完成。NFR-001 若只有应用提交时间，必须保留首帧时间未证实的限制。
 - T015 的端到端延迟优先使用备忘录实际 AX 写入/读回验证作为终点；不超过 15 秒和 30 秒各计划 20 次，记录分布及失败，和八应用矩阵结果分别统计并复用重叠试次。输入使用许可清楚的非私人测试语句，经播放器和真实麦克风进入产品路径；UI 操作只经 CUA，不向发布产品注入 WAV 或成功回执。进程冷启动用 `proc_pid_rusage` 起始时间至实际 ready，3～5 次且计入模型验证/加载；空闲 CPU 用 120 秒进程 user+system 累计差与单调墙钟计算，区间无采集/下载/校验且仅采样两端。无法可靠执行的真实操作如实记录，不能用模拟结果替代。
 - T015 本地性能事件由单一串行 sink 写入固定的应用支持目录；只接受固定事件/结果枚举、随机过程与会话 UUID、单调时间和必要时长，不接受任意字符串、识别文本、窗口/应用标题、剪贴板或路径。文件限制 owner-only、有限总容量和保留数量，默认不上传，并在隐私说明披露用途。普通界面按键路径和正式 release 配置使用相同事件边界，不能为测量插入模拟成功。状态投影仅在相关值变化时发布，隐藏窗口不持续渲染；设备列表在显示/打开菜单或实际硬件变化时更新。性能修正不降低正在录音时的安全输入、权限、期限和 common-mode 检查频率。
+- 每次真实按下在所有拒绝检查前建立独立 attempt UUID，松开最多一次并只归属该按下；忙碌、权限等拒绝也记录失败，不能写到正在识别的旧会话。汇总的测量集可由明确 process/session UUID 选择，不能按成功事件倒推分母；缺松开、停止或时长的尝试保留为不完整/未知时长并阻止相应延迟通过，不静默过滤。NFR-006 的 5 秒限制校验每次冷启动（最大值），P95 仅辅助描述。音频实际 start/stop 事件在 engine queue 的真实边界记录，Coordinator 回调如保留则使用不同名称。输入计划开始失效就撤销 idle readiness，只有当前计划的 ticket 提交才恢复；权限设置失败的诊断存储停写。投影去重必须覆盖快捷键测试等可见状态，不能吞掉成功或重置通知。
 
 #### 数据模型 / 关键实体
 
@@ -434,8 +436,35 @@ worker 返回签名构建 `20261022-140245` 后，主 Agent 安排独立 reviewe
 
 CUA 随后的状态检查明确报告 Mac 已锁屏；已经请求用户在本机解锁并完成右 Option 物理按键，无需发送密码。源码与非 GUI 验证可继续。ASR 推理目录与 d96fc52 无差异，因此不重复 120 条准确率评测；DEC-024 的实际结果和失败记录保持原样。
 
+本批源码以 `e1887d5` 提交并推送，建立并附加了[草稿 PR #4](https://github.com/arnow117/voice-dictation/pull/4)。PR 明确保留性能、八应用兼容性和安装验证待完成，未请求他人评审、合并或改变仓库可见性。T015 已开始，T016、最终独立 validate/review 与公开发布尚未完成。
+
+T015 测量代码返回后，主 Agent 安排既有独立 reviewer 只读复核生产事件关联、冷启动 readiness 与日志权限/有界存储，原因是错误的事件归属或就绪边界会造成虚假性能结论，日志也必须遵守隐私约束。主 Agent 同时复核汇总/采样工具与无变化投影，聚合点为这份测量实现的 build 验收；不代替最终 lifecycle review。
+
+对固定未提交 `144327` 测量实现的首轮复核确认：忙碌新按键的 release 串入旧 activeSession、设备新准备保留旧 available、诊断权限设置错误被忽略；投影去重的字段未包含快捷键测试成功状态。主 Agent 对实际汇总函数做两组内存事件对照，20 个成功短样本加 1 个失败但无 stop 的尝试被错误报为 20 成功/0 失败 PASS；三次冷启动 1、1、5.2 秒因 P95=4.78 秒而错误 PASS。音频 start/stop 事件也记录于 Coordinator 主线程回调而非 engine queue 的实际边界。保留这些首轮失败证据，更新当前有效方案并交同一 worker 修正；这不是已通过的性能结果。
+
 ### T011/T013/T014 pending 路由与 readiness 收尾（worker 实现，待主 Agent 验收，2026-10-22）
 
 - **排队路由**：`PendingPreparation` 现在保存 `startOnEngineQueue` 已解析的 `ResolvedInputDevicePlan`。当 A 正在准备而 B 已按下后，A 的完成只会用 B 当时的 UID/ID 开始下一 ticket；不会重新查默认设备并静默变成 C。无法解析的 pending request 会立即以 unavailable 结束，不留下既不采集也不回调的 operation。
 - **真实 ready**：`cachedAvailability` 仅由 `commitPreparation` 在 route、format、engine/configuration epoch 和物理输入均匹配时设为 true。超时、route mismatch、format 无效和 engine retirement 都保持 false；物理 format 有效只是准备前提，不能自行发布可录音。
 - **本次检查**：`xcrun swift-format lint`（受影响 Swift）与 `git diff --check` exit 0。`bash tests/integration/run_queued_audio_operation_lease_harness.sh` exit 0；它用生产 `MemoryAudioCapture` 覆盖 A preparing → B queued → 系统默认 C → A completion：仅配置 B、从不配置 C、B 得到明确 unavailable，而不是遗漏 completion；还覆盖 timeout 后 replacement engine 格式有效但未准备、以及 route mismatch 时 `isAvailable == false`。沙箱外 `SKIP_ASR=1 bash scripts/test.sh` exit 0，签名 build `20261022-141922`，13 个 Swift 单元测试及全部既有 harness 均通过。ASR 输入未变，未重跑 120 条评测。
+
+### T015 本地性能观测、测量工具与空闲刷新修正（worker 实现，待主 Agent 验收，2026-10-22）
+
+- **受限诊断边界**：新增 `PerformanceDiagnostics` 的固定 event/result 枚举和单调 mach 时间；事件只含随机 process/session UUID、固定类型、结果、时间与必要音频时长，没有可扩展字符串或元数据。生产 sink 在 Application Support/Shanshuo/PerformanceDiagnostics 单一串行队列写入每进程 JSONL；目录 0700、文件 0600、最多保留 8 个文件、每个最大 512 KiB，从不上传。隐私页和 README 明确说明内容不含听写、应用/窗口标题、剪贴板、URL、路径或 error description。
+- **生产事实与会话关联**：Coordinator 在实际 onHold 回调记录按下/松开，在 `RecordingPill.showRecording()` 成功后记录显示提交；MemoryAudioCapture 仅在真实 engine start completion、tap 首缓冲和 stop callback 记录；识别回调、AX 设置后的读回验证、复制完成、粘贴/Unicode 请求也各自记录。AX readback 是唯一 verified insertion 终点；paste/unicode 仅为 requested，unverified/copy/failure/cancel 都保留 session_finished 分母，stale callback 不会生成成功事件。冷启动 process start 使用 `proc_pid_rusage(...ri_proc_start_abstime)`，ready 要求麦克风授权、已 ready 模型、可用热键、音频 prepare 已提交和未暂停。
+- **空闲路径修正**：AppModel 只在 AppStatusSnapshot 改变时发布；Settings、Privacy 和 Onboarding 隐藏时只缓存 snapshot，打开窗口后才 render。CoreAudio 输入设备清单改为缓存，仅在设备 UI 显示、popup 打开或真实 CoreAudio 设备列表变化时刷新；popup tracking 期间仍不重建。AVAudioEngine 的自身路由配置通知不再触发设备枚举。0.5 秒 common-mode refresh、权限/安全输入/暂停/期限检查和录音 timer 保持原频率与原语义。
+- **测量与报告**：新增 `bench/e2e/measure.py`（同 PID 两端 `ps` user+system / monotonic wall CPU，PID/lstart 核验；或收到新的 production first-buffer 后才 `afplay` 既有 WAV）和 `report_metrics.py`。报告要求冷启动至少 3 个成功样本、显示提交至少 40 个、≤15 秒和约 30 秒各至少 20 个 AX-verified 样本；失败/取消/不完整、copy/unverified 和请求式插入永不 PASS。显示结果明确命名为 AppKit display/isVisible 提交，屏幕首帧 NFR-001 保持 UNVERIFIED。夹具和 FLEURS CC-BY-4.0、ASCEND CC-BY-SA-4.0 来源说明在 `bench/e2e/README.md`；工具不驱动 UI、输入设备或系统音量，也不向产品注入 WAV。
+- **本次检查**：`xcrun swift-format lint`（本段 Swift 与 harness）和 `git diff --check` exit 0；diagnostics、Coordinator、TextInserter、queued audio、native window 与 Python metrics harness 均 exit 0。只读 `ps` 字段和 `measure.py cpu --seconds 0.01` 冒烟通过，后者不是 120 秒结论。沙箱内 build/test 因 keychain unlock exit 206；按既有授权在沙箱外执行 `bash scripts/build.sh` exit 0，最终 `SKIP_ASR=1 bash scripts/test.sh` exit 0（build `20261022-144327`，13 个 Swift 单元测试及全 harness）。ASR 代码和输入未改，未重跑 120 条评测。
+- **仍待主 Agent 真机整合**：没有启动或操作父 Agent 的 GUI、麦克风、权限、辅助功能、系统设置、实际 120 秒空闲测量、冷启动 3–5 次、40/20/20 延迟采样、扬声器到真实麦克风、屏幕首帧、VoiceOver、设备插拔、多屏或 DEC-023 八应用矩阵；这些都不能由本段自动化或工具冒充通过。worker 工具没有返回可核验的实际运行模型 metadata。
+
+### T015 复核边界修正（worker 实现，待主 Agent 验收，2026-10-22）
+
+- **按键与引擎事实**：每个 onHold 按下先分配随机 attempt UUID 并立即记录 press；busy、权限、模型或其他开始拒绝记录该 UUID 的 failed `session_finished`，key-up 只消费同一按键的 held attempt，不能写入仍在识别的旧 session。Coordinator 不再根据主线程 capture callback 声称 audio engine 已开始或停止。`MemoryAudioCapture` 在其串行 engine queue 上、紧邻实际 `engine.start()` 成功/抛错和 `engine.stop()` 后记录 engine 事件；实际停录附带音频时长，取消/迟到 start 仅在实际开始过时记录一次停止。first-buffer 仍在生产 tap 边界。
+- **ready、投影与本地存储**：空闲输入设备选择或新的 prepare 会同步撤销旧 `cachedAvailability`，只有当前 route/configuration ticket 成功 commit 才重新置 true；活动采集的设置仍只影响下一次。`AppStatusSnapshot` 包含可见的 shortcut-test 成功状态，开始/重置和完成都能穿过去重发布。性能 JSONL 在创建目录/文件、应用 0700/0600 或验证权限任一失败时保持 `isReady == false` 并拒绝 append；保留 8 个文件、每个 512 KiB 的有界策略不变。
+- **报告防伪通过**：`report_metrics.py` 支持 process UUID 和 session UUID 选择。缺 release、无 stop/时长和无效 JSONL 行会作为 missing/unknown/invalid 分母阻止受影响的 latency PASS；失败终态没有 stop 也进入 failed 分母。冷启动保留 P50/P95 描述，但 NFR-006 按每次启动的 5 秒 maximum 判定。README/bench 说明了 selector、unknown 样本和屏幕首帧仍未证实。
+- **自动化证据**：`run_coordinator_harness.sh` 覆盖 A 进入 ASR、B busy press/release 拥有独立 failed attempt 且 A 仍完成；`run_queued_audio_operation_lease_harness.sh` 覆盖生产 `MemoryAudioCapture` 的 A ready→B pending/timeout 同步撤销，和实际 adapter 在 engine start 未执行时不记录伪 engine fact；它也保留既有 queue-cancel/ownership 覆盖。`run_native_window_construction_harness.sh` 覆盖 AppModel observer 的快捷键完成/重置和“模型随后 ready 但 B 未准备”不能 cold-ready；`run_performance_diagnostics_harness.sh` 显式注入权限应用失败；Python metrics 8 项覆盖 20 成功+缺 stop 失败、缺 release、process/session selection、无效行和 1/1/5.2 秒冷启动 maximum。`xcrun swift-format lint`、`git diff --check` 与沙箱外 `SKIP_ASR=1 bash scripts/test.sh` 均 exit 0，签名 build `20261022-145800`。沙箱内同命令先在既有 keychain unlock 返回 exit 206；未读取或输出密码。
+- **真实范围仍未覆盖**：自动化没有启动实际 AVAudioEngine、采集麦克风或播放夹具，因此不把 adapter 的无硬件分支当作真实 engine start/stop、first buffer、端到端或 NFR 通过。没有执行真实 120 秒 CPU、3–5 次 cold start、40/20/20 听写、NFR-001 屏幕首帧、VoiceOver、设备插拔、多屏或 DEC-023 应用矩阵；这些仍由主 Agent 在解锁后的真实系统整合中记录。ASR 代码/输入未改，未重跑 120 条；运行时模型 metadata 未由 worker 工具返回。
+
+### T015 测量实现的主 Agent 验收（2026-10-22）
+
+主 Agent 复核七项确定性纠正：独立 attempt 的 busy/拒绝终态及匹配 release、prepare 同步撤销旧 readiness、诊断存储权限失败拒绝写入、shortcut-test 状态进入去重投影、缺 release/stop/时长与无效行保留失败分母、冷启动按 maximum 判定，以及 engine queue 的实际 start/stop 边界。复核相应生产路径与 harness，另实际执行 `bash tests/integration/run_performance_metrics_test.sh`，8 项通过；`git diff --check` exit 0。接受签名构建 `20261022-145800` 的这份测量实现；复用同代码/环境的 worker 全量 `SKIP_ASR=1 bash scripts/test.sh` exit 0 证据，不重复未变的长 ASR。T015 继续 in_progress，真实性能、系统安全与八应用矩阵未完成，不代表 NFR 通过。CUA 现已重新取得欢迎窗口的快捷键步骤，锁屏阻塞已解除，后续从新构建继续系统整合。

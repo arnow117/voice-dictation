@@ -31,6 +31,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSMe
   private var inputDeviceMenuIsTracking = false
   private var renderedShortcutChoices: [ShortcutChoice] = []
   private var renderedInputDevices: [InputDevice] = []
+  private var latestSnapshot: AppStatusSnapshot?
 
   init(
     model: AppModel,
@@ -60,6 +61,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSMe
     window.delegate = self
     configureWindow()
     observation = model.observe { [weak self] snapshot in
+      self?.latestSnapshot = snapshot
+      guard self?.window?.isVisible == true else {
+        return
+      }
       self?.render(snapshot)
     }
   }
@@ -78,6 +83,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSMe
     super.showWindow(sender)
     window?.makeKeyAndOrderFront(nil)
     NSApp.activate(ignoringOtherApps: true)
+    model.refreshInputDevices()
+    if let latestSnapshot {
+      render(latestSnapshot)
+    }
   }
 
   func windowWillClose(_ notification: Notification) {
@@ -224,6 +233,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSMe
   }
 
   private func render(_ snapshot: AppStatusSnapshot) {
+    guard window?.isVisible == true else {
+      return
+    }
     populateShortcutChoices(selected: snapshot.preferredShortcut)
     populateInputDevices(selectedUID: model.selectedInputDeviceUID())
     soundButton.state = snapshot.soundEnabled ? .on : .off
@@ -304,6 +316,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSMe
       shortcutMenuIsTracking = true
     }
     if menu == inputDevicePopup.menu {
+      model.refreshInputDevices()
       inputDeviceMenuIsTracking = true
     }
   }

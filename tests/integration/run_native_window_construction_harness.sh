@@ -21,6 +21,7 @@ swiftc -swift-version 5 -target arm64-apple-macos14.0 -module-cache-path "$WORK/
   "$ROOT/app/Shanshuo/App/Paths.swift" \
   "$ROOT/app/Shanshuo/App/PracticeSessionState.swift" \
   "$ROOT/app/Shanshuo/App/SoundPreference.swift" \
+  "$ROOT/app/Shanshuo/Performance/PerformanceDiagnostics.swift" \
   "$ROOT/app/Shanshuo/Coordinator/DictationCoordinator.swift" \
   "$ROOT/app/Shanshuo/History/HistoryStore.swift" \
   "$ROOT/app/Shanshuo/Models/ModelFileDownloader.swift" \

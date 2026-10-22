@@ -160,9 +160,9 @@
             "T014"
           ],
           "id": "T015",
-          "status": "todo",
+          "status": "in_progress",
           "title": "质量指标与兼容性验收",
-          "updated_at": "2026-10-21T21:15:00+08:00"
+          "updated_at": "2026-10-22T06:23:01Z"
         },
         "T016": {
           "depends_on": [
@@ -174,7 +174,7 @@
           "updated_at": "2026-10-21T21:15:00+08:00"
         }
       },
-      "updated_at": "2026-10-22T06:21:53Z",
+      "updated_at": "2026-10-22T06:23:01Z",
       "validation": {
         "at": null,
         "command": null,
@@ -195,7 +195,7 @@
       "product_context_ref": ".sdlc-v1/context/REQ-001.product.md",
       "status": "in_delivery",
       "title": "按住快捷键语音输入核心闭环",
-      "updated_at": "2026-10-22T06:21:53Z"
+      "updated_at": "2026-10-22T06:23:01Z"
     },
     "REQ-002": {
       "created_at": "2026-10-21T11:25:28Z",

@@ -148,9 +148,13 @@ final class DictationCoordinator {
   private let hotkeys: HotkeyMonitoring
   private let clock: DictationClock
   private let timerScheduler: CoordinatorTimerScheduling
+  private let performanceDiagnostics: PerformanceEventRecording
   private let onReceiptEnded: (InsertionReceipt) -> Void
   private let onSessionOutcome: (SessionOutcome) -> Void
   private var activeSession: ActiveSession?
+  /// The event tap only supplies press and release edges. Retain the generated ID for each held
+  /// trigger so a rejected press cannot later release whichever session happens to be active.
+  private var heldHotkeyAttempts: [(shortcut: HoldShortcut, id: UUID)] = []
   private var recordingTimer: CoordinatorTimer?
   private var receiptExpiryTimer: CoordinatorTimer?
   private var pendingInsertion: TextInsertionOperation?
@@ -186,6 +190,7 @@ final class DictationCoordinator {
     hotkeys: HotkeyMonitoring,
     clock: DictationClock = SystemDictationClock(),
     timerScheduler: CoordinatorTimerScheduling = MainRunLoopTimerScheduler(),
+    performanceDiagnostics: PerformanceEventRecording = NoopPerformanceEventRecorder(),
     onReceiptEnded: @escaping (InsertionReceipt) -> Void = { _ in },
     onSessionOutcome: @escaping (SessionOutcome) -> Void = { _ in }
   ) {
@@ -198,6 +203,7 @@ final class DictationCoordinator {
     self.hotkeys = hotkeys
     self.clock = clock
     self.timerScheduler = timerScheduler
+    self.performanceDiagnostics = performanceDiagnostics
     self.onReceiptEnded = onReceiptEnded
     self.onSessionOutcome = onSessionOutcome
     self.audioCapture.onInterruption = { [weak self] operation in
@@ -318,10 +324,17 @@ final class DictationCoordinator {
 
   func hotkeyChanged(_ shortcut: HoldShortcut, isPressed: Bool) {
     requireMainThread()
+    let callbackTimestamp = performanceDiagnostics.now()
     if isPressed {
-      beginRecording(shortcut: shortcut)
+      let attemptID = UUID()
+      retainHotkeyAttempt(shortcut: shortcut, id: attemptID)
+      beginRecording(
+        shortcut: shortcut,
+        attemptID: attemptID,
+        hotkeyTimestamp: callbackTimestamp
+      )
     } else {
-      endRecording()
+      endRecording(shortcut: shortcut, hotkeyTimestamp: callbackTimestamp)
     }
   }
 
@@ -375,10 +388,21 @@ final class DictationCoordinator {
     cancel(message: "麦克风配置已变化，本次内容已丢弃")
   }
 
-  private func beginRecording(shortcut: HoldShortcut) {
-    clearRetainedReceipt()
+  private func beginRecording(
+    shortcut: HoldShortcut,
+    attemptID: UUID,
+    hotkeyTimestamp: MonotonicTimestamp
+  ) {
+    performanceDiagnostics.record(
+      kind: .hotkeyPressed,
+      result: .observed,
+      sessionID: attemptID,
+      timestamp: hotkeyTimestamp,
+      audioDuration: nil
+    )
     guard phase == .idle, microphoneTestOperation == nil else {
       indicator.showBusyFeedback()
+      recordAttemptFinished(id: attemptID, result: .failed)
       return
     }
 
@@ -397,12 +421,14 @@ final class DictationCoordinator {
       break
     case .rejected(let rejection):
       indicator.showMessage(StartDecision.rejected(rejection).message, hideAfter: 2)
+      recordAttemptFinished(id: attemptID, result: .failed)
       return
     }
 
+    clearRetainedReceipt()
     generation.invalidate()
     let session = ActiveSession(
-      id: UUID(),
+      id: attemptID,
       generation: generation,
       startedAt: clock.now(),
       pressTarget: pressTarget,
@@ -414,14 +440,19 @@ final class DictationCoordinator {
     )
     activeSession = session
     secureInputLatched = false
-
     // Do not start AVAudioEngine until the nonactivating pill and menu state are both visible.
     guard indicator.showRecording() else {
       finish(message: "录音提示无法显示，未开始录音")
       return
     }
+    performanceDiagnostics.record(
+      kind: .recordingDisplayCommitted,
+      result: .succeeded,
+      sessionID: session.id
+    )
     phase = .starting
     hotkeys.setCancellationInterception(true)
+    (audioCapture as? PerformanceSessionConfiguring)?.setPerformanceSessionID(session.id)
     audioOperation = audioCapture.start(
       onLevel: { [weak self] level in
         self?.updateRecordingIndicator(level: level, generation: session.generation)
@@ -432,9 +463,22 @@ final class DictationCoordinator {
     )
   }
 
-  private func endRecording() {
+  private func endRecording(shortcut: HoldShortcut, hotkeyTimestamp: MonotonicTimestamp) {
     requireMainThread()
-    guard let session = activeSession else {
+    guard let attemptID = releaseHotkeyAttempt(for: shortcut) else {
+      return
+    }
+    performanceDiagnostics.record(
+      kind: .hotkeyReleased,
+      result: .observed,
+      sessionID: attemptID,
+      timestamp: hotkeyTimestamp,
+      audioDuration: nil
+    )
+    guard let session = activeSession,
+      session.id == attemptID,
+      session.shortcut == shortcut
+    else {
       return
     }
     if phase == .starting {
@@ -478,7 +522,8 @@ final class DictationCoordinator {
     generation sessionGeneration: SessionGeneration
   ) {
     requireMainThread()
-    guard activeSession?.generation == sessionGeneration,
+    guard let session = activeSession,
+      session.generation == sessionGeneration,
       phase == .starting,
       audioOperation === operation
     else {
@@ -503,7 +548,6 @@ final class DictationCoordinator {
       return
     }
     audioOperation = nil
-
     let heldDuration = clock.now().timeIntervalSince(session.startedAt)
     guard DictationRules.releaseDisposition(heldFor: heldDuration) == .recognize else {
       audio.erase()
@@ -549,6 +593,21 @@ final class DictationCoordinator {
       return
     }
     pendingRecognition = nil
+    guard let session = activeSession else {
+      return
+    }
+    let recognitionResult: PerformanceEventResult
+    switch result {
+    case .success:
+      recognitionResult = .delivered
+    case .failure:
+      recognitionResult = .failed
+    }
+    performanceDiagnostics.record(
+      kind: .recognitionDelivered,
+      result: recognitionResult,
+      sessionID: session.id
+    )
     cancelIfSecureInputActive()
     guard isCurrentRecognizingSession(completionGeneration) else {
       return
@@ -588,6 +647,7 @@ final class DictationCoordinator {
     let decision = DictationRules.insertionDecision(context)
     phase = .inserting
     cancelPendingInsertion()
+    (textInserter as? PerformanceSessionConfiguring)?.setPerformanceSessionID(session.id)
 
     switch decision.action {
     case .discard:
@@ -651,17 +711,17 @@ final class DictationCoordinator {
     case .inserted(let receipt):
       retain(receipt: receipt)
       publishOutcome(session: session, text: text, delivery: .inserted)
-      finish(message: "已插入")
+      finish(message: "已插入", performanceResult: .verifiedInsertion)
     case .copied(let message):
       publishOutcome(session: session, text: text, delivery: .copied)
       if wasCopyOnlySession {
         finishCopyOnly(message: message)
       } else {
-        finish(message: message)
+        finish(message: message, performanceResult: .copied)
       }
     case .unverified(let message):
       publishOutcome(session: session, text: text, delivery: .unverified)
-      finish(message: message)
+      finish(message: message, performanceResult: .unverified)
     case .discarded(let message):
       finish(message: message)
     }
@@ -774,19 +834,24 @@ final class DictationCoordinator {
     cancelPendingRecognition()
     cancelPendingInsertion()
     cancelAudioOperation()
+    recordSessionFinished(result: .cancelled)
     activeSession = nil
     hotkeys.setCancellationInterception(false)
     indicator.showMessage(message, hideAfter: 1.5)
     phase = .idle
   }
 
-  private func finish(message: String) {
+  private func finish(
+    message: String,
+    performanceResult: PerformanceEventResult = .failed
+  ) {
     generation.invalidate()
     recordingTimer?.cancel()
     recordingTimer = nil
     cancelPendingRecognition()
     cancelPendingInsertion()
     cancelAudioOperation()
+    recordSessionFinished(result: performanceResult)
     activeSession = nil
     hotkeys.setCancellationInterception(false)
     indicator.showMessage(message, hideAfter: 1.5)
@@ -800,10 +865,38 @@ final class DictationCoordinator {
     cancelPendingRecognition()
     cancelPendingInsertion()
     cancelAudioOperation()
+    recordSessionFinished(result: .copied)
     activeSession = nil
     hotkeys.setCancellationInterception(false)
     indicator.showCopyOnlyResult(message)
     phase = .idle
+  }
+
+  private func recordSessionFinished(result: PerformanceEventResult) {
+    guard let session = activeSession else {
+      return
+    }
+    recordAttemptFinished(id: session.id, result: result)
+  }
+
+  private func recordAttemptFinished(id: UUID, result: PerformanceEventResult) {
+    performanceDiagnostics.record(
+      kind: .sessionFinished,
+      result: result,
+      sessionID: id
+    )
+  }
+
+  private func retainHotkeyAttempt(shortcut: HoldShortcut, id: UUID) {
+    heldHotkeyAttempts.removeAll { $0.shortcut == shortcut }
+    heldHotkeyAttempts.append((shortcut: shortcut, id: id))
+  }
+
+  private func releaseHotkeyAttempt(for shortcut: HoldShortcut) -> UUID? {
+    guard let index = heldHotkeyAttempts.lastIndex(where: { $0.shortcut == shortcut }) else {
+      return nil
+    }
+    return heldHotkeyAttempts.remove(at: index).id
   }
 
   private func isCurrentRecognizingSession(_ completionGeneration: SessionGeneration) -> Bool {

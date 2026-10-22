@@ -14,6 +14,8 @@ mkdir -p "$CLANG_MODULE_CACHE_PATH"
 swiftc -swift-version 5 -target arm64-apple-macos14.0 -module-cache-path "$WORK/build/.mc" \
   -I "$WORK/build/obj" -L "$WORK/build/obj" -lShanshuoCore \
   -framework AppKit -framework Carbon -framework ApplicationServices \
+  "$ROOT/app/Shanshuo/App/Paths.swift" \
+  "$ROOT/app/Shanshuo/Performance/PerformanceDiagnostics.swift" \
   "$ROOT/app/Shanshuo/Platform/HotkeyConfiguration.swift" \
   "$ROOT/app/Shanshuo/Platform/TextInsertionOperation.swift" \
   "$ROOT/app/Shanshuo/Platform/SystemState.swift" \

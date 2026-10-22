@@ -161,6 +161,36 @@ private final class FakeIndicator: RecordingIndicating {
   func hide() { calls.append("indicator.hide") }
 }
 
+private final class FakePerformanceRecorder: PerformanceEventRecording {
+  let processID = UUID()
+  private var nextTimestamp: UInt64 = 0
+  private(set) var events: [PerformanceDiagnosticEvent] = []
+
+  func now() -> MonotonicTimestamp {
+    nextTimestamp &+= 1
+    return MonotonicTimestamp(nanoseconds: nextTimestamp)
+  }
+
+  func record(
+    kind: PerformanceEventKind,
+    result: PerformanceEventResult,
+    sessionID: UUID,
+    timestamp: MonotonicTimestamp,
+    audioDuration: TimeInterval?
+  ) {
+    events.append(
+      PerformanceDiagnosticEvent(
+        kind: kind,
+        result: result,
+        processID: processID,
+        sessionID: sessionID,
+        timestamp: timestamp,
+        audioDuration: audioDuration
+      )
+    )
+  }
+}
+
 private final class FakeAudioOperation: AudioCaptureOperation {
   private let onCancel: () -> Void
   private(set) var isCancelled = false
@@ -494,6 +524,7 @@ private struct Harness {
   let timers: ManualTimerScheduler
   let receiptEndObserver: ReceiptEndObserver
   let outcomeObserver: OutcomeObserver
+  let performanceRecorder: FakePerformanceRecorder
   let coordinator: DictationCoordinator
 
   init() {
@@ -515,6 +546,7 @@ private struct Harness {
     timers = ManualTimerScheduler()
     receiptEndObserver = ReceiptEndObserver()
     outcomeObserver = OutcomeObserver()
+    performanceRecorder = FakePerformanceRecorder()
     coordinator = DictationCoordinator(
       permissions: permissions,
       focusInspector: focus,
@@ -525,6 +557,7 @@ private struct Harness {
       hotkeys: hotkeys,
       clock: clock,
       timerScheduler: timers,
+      performanceDiagnostics: performanceRecorder,
       onReceiptEnded: receiptEndObserver.record,
       onSessionOutcome: outcomeObserver.record
     )
@@ -561,6 +594,96 @@ private func testOrderingAndInsertion() {
   harness.recognizer.complete(.success("hello"))
   check(harness.inserter.insertCalls == 1, "same editable focus inserts")
   check(harness.coordinator.phase == .idle, "completed session returns idle")
+}
+
+private func testPerformanceEventsFollowProductionFacts() {
+  let harness = Harness()
+  harness.pressAndRelease()
+  harness.recognizer.complete(.success("verified insertion"))
+
+  let eventKinds = harness.performanceRecorder.events.map(\.kind)
+  check(
+    eventKinds == [
+      .hotkeyPressed,
+      .recordingDisplayCommitted,
+      .hotkeyReleased,
+      .recognitionDelivered,
+      .sessionFinished,
+    ],
+    "the coordinator records only callback and delivery facts, leaving hardware facts to the adapter"
+  )
+  guard let sessionID = harness.performanceRecorder.events.first?.sessionID else {
+    check(false, "accepted lifecycle events receive a session identifier")
+    return
+  }
+  check(
+    harness.performanceRecorder.events.allSatisfy { $0.sessionID == sessionID },
+    "accepted lifecycle events retain one random session identifier"
+  )
+  check(
+    harness.performanceRecorder.events.last?.result == .verifiedInsertion,
+    "AX-verified insertion is the only verified final outcome"
+  )
+
+  let staleHarness = Harness()
+  staleHarness.coordinator.hotkeyChanged(.function, isPressed: true)
+  staleHarness.coordinator.hotkeyChanged(.function, isPressed: false)
+  staleHarness.audio.completePendingStart()
+  check(
+    staleHarness.performanceRecorder.events.last?.result == .cancelled,
+    "cancelled attempts remain in the diagnostic denominator"
+  )
+}
+
+private func testRejectedHoldKeepsItsOwnDiagnosticAttempt() {
+  let harness = Harness()
+  harness.pressAndRelease()
+  guard let activeAttemptID = harness.performanceRecorder.events.first?.sessionID else {
+    check(false, "the active attempt has a diagnostic identifier")
+    return
+  }
+  check(harness.coordinator.phase == .recognizing, "the first attempt remains active during ASR")
+
+  harness.coordinator.hotkeyChanged(.function, isPressed: true)
+  guard
+    let rejectedPress = harness.performanceRecorder.events.last(where: {
+      $0.kind == .hotkeyPressed && $0.sessionID != activeAttemptID
+    })
+  else {
+    check(false, "a busy physical press creates its own diagnostic attempt")
+    return
+  }
+  let rejectedAttemptID = rejectedPress.sessionID
+  check(
+    harness.performanceRecorder.events.contains {
+      $0.kind == .sessionFinished && $0.sessionID == rejectedAttemptID && $0.result == .failed
+    },
+    "a busy physical press records an explicit failed terminal outcome"
+  )
+
+  harness.coordinator.hotkeyChanged(.function, isPressed: false)
+  check(
+    harness.performanceRecorder.events.filter {
+      $0.kind == .hotkeyReleased && $0.sessionID == rejectedAttemptID
+    }.count == 1,
+    "the rejected physical release belongs to the rejected attempt exactly once"
+  )
+  check(
+    harness.performanceRecorder.events.filter {
+      $0.kind == .hotkeyReleased && $0.sessionID == activeAttemptID
+    }.count == 1,
+    "a later rejected release cannot add a release event to the active attempt"
+  )
+  check(
+    harness.coordinator.phase == .recognizing,
+    "a rejected hold never changes the active ASR attempt"
+  )
+
+  harness.recognizer.complete(.success("first attempt still completes"))
+  check(
+    harness.performanceRecorder.events.last?.sessionID == activeAttemptID,
+    "the active attempt completes under its original diagnostic identifier"
+  )
 }
 
 private func testAsyncStartCannotReviveReleasedOrCancelledSession() {
@@ -1184,6 +1307,8 @@ private func testClosingPracticeCancelsOnlyTheClaimedSession() {
 enum CoordinatorHarnessMain {
   static func main() {
     testOrderingAndInsertion()
+    testPerformanceEventsFollowProductionFacts()
+    testRejectedHoldKeepsItsOwnDiagnosticAttempt()
     testAsyncStartCannotReviveReleasedOrCancelledSession()
     testAudioReconfigurationCancelsAndRecovers()
     testAutoStopCapturesReleaseTarget()

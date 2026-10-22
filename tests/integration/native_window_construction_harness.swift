@@ -84,10 +84,17 @@ private final class FakeAudioOperation: AudioCaptureOperation {
 }
 
 private final class FakeAudioCapture: AudioCapturing {
-  let isAvailable = true
+  var isAvailable = true
+  var invalidateReadinessOnSelection = false
   var onInterruption: ((AudioCaptureOperation) -> Void)?
   var availableInputDevices: [InputDevice] = [InputDevice(uid: "default", name: "Default")]
-  var selectedInputDeviceUID: String?
+  var selectedInputDeviceUID: String? {
+    didSet {
+      if invalidateReadinessOnSelection {
+        isAvailable = false
+      }
+    }
+  }
 
   func prepare() {}
 
@@ -234,6 +241,51 @@ enum NativeWindowConstructionHarness {
       modelManager: FakeModelManager(),
       historyStore: HistoryStore(directory: temporaryDirectory),
       defaults: UserDefaults(suiteName: "shanshuo-window-layout-\(UUID().uuidString)")!
+    )
+    var observedShortcutTestResults: [Bool] = []
+    let shortcutObservation = appModel.observe { snapshot in
+      observedShortcutTestResults.append(snapshot.shortcutTestSucceeded)
+    }
+    appModel.beginShortcutTest()
+    appModel.recordHotkeyEvent(.function, isPressed: true)
+    appModel.recordHotkeyEvent(.function, isPressed: false)
+    check(
+      observedShortcutTestResults.last == true,
+      "the production AppModel publishes a completed shortcut test to its native observers"
+    )
+    appModel.beginShortcutTest()
+    check(
+      observedShortcutTestResults.last == false,
+      "resetting a shortcut test publishes the visible incomplete state"
+    )
+    appModel.removeObserver(shortcutObservation)
+
+    let coldStartAudio = FakeAudioCapture()
+    let coldStartModelManager = FakeModelManager()
+    let coldStartModel = AppModel(
+      permissions: permissions,
+      hotkeys: FakeHotkeys(),
+      coordinator: coordinator,
+      audioCapture: coldStartAudio,
+      modelManager: coldStartModelManager,
+      historyStore: HistoryStore(directory: temporaryDirectory),
+      defaults: UserDefaults(suiteName: "shanshuo-cold-start-\(UUID().uuidString)")!
+    )
+    coldStartModel.audioPreparationWasSubmitted()
+    check(
+      !coldStartModel.isReadyForFirstDictation,
+      "a ready A input cannot make cold start ready before the model is verified"
+    )
+    coldStartAudio.invalidateReadinessOnSelection = true
+    coldStartModel.selectInputDevice(uid: "replacement-B")
+    check(
+      !coldStartAudio.isAvailable,
+      "the production AppModel sees readiness revoked while replacement B is pending"
+    )
+    coldStartModelManager.status = .ready(location: temporaryDirectory, isReadOnly: true)
+    check(
+      !coldStartModel.isReadyForFirstDictation,
+      "a model becoming ready cannot record cold readiness while B remains unprepared"
     )
     let controllers: [NSWindowController] = [
       ModelManagementWindowController(manager: FakeModelManager()),
