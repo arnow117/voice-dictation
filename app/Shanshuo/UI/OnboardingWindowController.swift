@@ -7,6 +7,7 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate, NS
 {
   private static let practiceTextAccessibilityIdentifier = "shanshuo-onboarding-practice"
   private let model: AppModel
+  private let practiceDiagnostics: PerformanceEventRecording
   private let openAccessibilitySettings: () -> Void
   private let openModelManagement: () -> Void
   private let titleLabel = NSTextField(labelWithString: "")
@@ -40,9 +41,11 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate, NS
     model: AppModel,
     openAccessibilitySettings: @escaping () -> Void,
     openModelManagement: @escaping () -> Void,
+    practiceDiagnostics: PerformanceEventRecording = NoopPerformanceEventRecorder(),
     microphoneTestStartGate: DeferredActionGate = DeferredActionGate()
   ) {
     self.model = model
+    self.practiceDiagnostics = practiceDiagnostics
     self.openAccessibilitySettings = openAccessibilitySettings
     self.openModelManagement = openModelManagement
     self.microphoneTestStartGate = microphoneTestStartGate
@@ -69,8 +72,8 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate, NS
     outcomeObservation = model.observeSessionOutcome { [weak self] outcome in
       self?.receive(outcome)
     }
-    model.setOnboardingPracticeBindingProvider { [weak self] pressTarget in
-      self?.livePracticeBinding(for: pressTarget)
+    model.setOnboardingPracticeBindingProvider { [weak self] pressTarget, attemptID in
+      self?.livePracticeBinding(for: pressTarget, attemptID: attemptID)
     }
   }
 
@@ -179,9 +182,12 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate, NS
     practiceTextView.setAccessibilityIdentifier(Self.practiceTextAccessibilityIdentifier)
     practiceTextView.delegate = self
     practiceTextView.onPaste = { [weak self] in
-      self?.practiceState.notePasteRequest()
+      guard let self, let attemptID = self.practiceState.notePasteRequest() else {
+        return
+      }
+      self.practiceDiagnostics.recordPractice(.pasteObserved, sessionID: attemptID)
       DispatchQueue.main.async {
-        self?.validatePastedPracticeText()
+        self.validatePastedPracticeText()
       }
     }
     let practiceScrollView = NSScrollView()
@@ -577,13 +583,33 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate, NS
   }
 
   private func receive(_ outcome: SessionOutcome) {
-    guard currentStep == .practice,
-      case .onboardingPractice(let binding) = outcome.purpose,
-      binding.matches(outcome.target),
-      binding.target.elementIdentifier == Self.practiceTextAccessibilityIdentifier
-    else {
+    guard case .onboardingPractice(let binding) = outcome.purpose else {
       return
     }
+
+    practiceDiagnostics.recordPractice(.outcomeReceived, sessionID: outcome.sessionID)
+    guard currentStep == .practice else {
+      practiceDiagnostics.recordPractice(.outcomeStepInactive, sessionID: outcome.sessionID)
+      return
+    }
+
+    let targetMatches =
+      binding.matches(outcome.target)
+      && binding.target.elementIdentifier == Self.practiceTextAccessibilityIdentifier
+    guard targetMatches else {
+      practiceDiagnostics.recordPractice(.outcomeTargetMismatch, sessionID: outcome.sessionID)
+      return
+    }
+    practiceDiagnostics.recordPractice(.outcomeTargetMatched, sessionID: outcome.sessionID)
+
+    guard binding.attemptID == outcome.sessionID else {
+      practiceDiagnostics.recordPractice(
+        .validation(.attemptMismatch),
+        sessionID: outcome.sessionID
+      )
+      return
+    }
+
     switch outcome.delivery {
     case .inserted, .unverified:
       verifyDirectPracticeReadback(
@@ -604,16 +630,26 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate, NS
   ) {
     let expectedGeneration = practiceGeneration
     DispatchQueue.main.async { [weak self] in
-      guard let self,
-        self.currentStep == .practice,
-        self.practiceGeneration == expectedGeneration,
-        self.practiceState.verifyDirectReadback(
-          self.practiceTextView.string,
-          expectedText: expectedText,
-          attemptID: attemptID,
-          isVerifiedDirectInsertion: delivery == .inserted
+      guard let self else {
+        return
+      }
+
+      guard self.currentStep == .practice, self.practiceGeneration == expectedGeneration else {
+        self.practiceDiagnostics.recordPractice(
+          .validation(.generationInvalidated),
+          sessionID: attemptID
         )
-      else {
+        return
+      }
+
+      let validation = self.practiceState.validateDirectReadback(
+        self.practiceTextView.string,
+        expectedText: expectedText,
+        attemptID: attemptID,
+        isVerifiedDirectInsertion: delivery == .inserted
+      )
+      self.practiceDiagnostics.recordPractice(.validation(validation), sessionID: attemptID)
+      guard validation == .verified else {
         return
       }
       self.render()
@@ -621,9 +657,13 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate, NS
   }
 
   private func validatePastedPracticeText() {
-    guard currentStep == .practice,
-      practiceState.verifyPastedReadback(practiceTextView.string)
-    else {
+    guard currentStep == .practice, let attemptID = practiceState.activeAttemptID else {
+      return
+    }
+
+    let validation = practiceState.validatePastedReadback(practiceTextView.string)
+    practiceDiagnostics.recordPractice(.validation(validation), sessionID: attemptID)
+    guard validation == .verified else {
       return
     }
     render()
@@ -638,17 +678,45 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate, NS
 
   /// The practice purpose is sampled on every global-key press. A stale focus snapshot is never
   /// enough: the same visible onboarding window must still own the exact native text responder.
-  private func livePracticeBinding(for pressTarget: TargetSnapshot) -> PracticeSessionBinding? {
-    guard currentStep == .practice,
-      let window,
-      window.isVisible,
-      window.isKeyWindow,
-      window.firstResponder === practiceTextView,
-      practiceTextView.window === window,
-      practiceTextView.isEditable,
-      !practiceTextView.isHidden,
-      !pressTarget.isSecure
-    else {
+  private func livePracticeBinding(
+    for pressTarget: TargetSnapshot,
+    attemptID: UUID
+  ) -> PracticeSessionBinding? {
+    guard currentStep == .practice else {
+      practiceDiagnostics.recordPractice(.bindingRejected(.stepInactive), sessionID: attemptID)
+      return nil
+    }
+    guard let window else {
+      practiceDiagnostics.recordPractice(.bindingRejected(.windowUnavailable), sessionID: attemptID)
+      return nil
+    }
+    guard window.isVisible else {
+      practiceDiagnostics.recordPractice(.bindingRejected(.windowHidden), sessionID: attemptID)
+      return nil
+    }
+    guard window.isKeyWindow else {
+      practiceDiagnostics.recordPractice(.bindingRejected(.windowNotKey), sessionID: attemptID)
+      return nil
+    }
+    guard window.firstResponder === practiceTextView else {
+      practiceDiagnostics.recordPractice(.bindingRejected(.responderMismatch), sessionID: attemptID)
+      return nil
+    }
+    guard practiceTextView.window === window else {
+      practiceDiagnostics.recordPractice(.bindingRejected(.textViewDetached), sessionID: attemptID)
+      return nil
+    }
+    guard practiceTextView.isEditable else {
+      practiceDiagnostics.recordPractice(
+        .bindingRejected(.textViewNotEditable), sessionID: attemptID)
+      return nil
+    }
+    guard !practiceTextView.isHidden else {
+      practiceDiagnostics.recordPractice(.bindingRejected(.textViewHidden), sessionID: attemptID)
+      return nil
+    }
+    guard !pressTarget.isSecure else {
+      practiceDiagnostics.recordPractice(.bindingRejected(.secureTarget), sessionID: attemptID)
       return nil
     }
 
@@ -659,11 +727,13 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate, NS
       isEditable: true,
       isSecure: false
     )
-    let binding = PracticeSessionBinding(target: expectedTarget)
+    let binding = PracticeSessionBinding(target: expectedTarget, attemptID: attemptID)
     guard binding.matches(pressTarget) else {
+      practiceDiagnostics.recordPractice(.bindingRejected(.targetMismatch), sessionID: attemptID)
       return nil
     }
     practiceState.beginAttempt(binding.attemptID, initialText: practiceTextView.string)
+    practiceDiagnostics.recordPractice(.bindingAccepted, sessionID: attemptID)
     return binding
   }
 

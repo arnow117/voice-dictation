@@ -55,6 +55,10 @@ enum PerformanceEventKind: String, Codable, CaseIterable, Sendable {
   case pasteRequested = "paste_requested"
   case unicodeRequested = "unicode_requested"
   case sessionFinished = "session_finished"
+  case practiceBinding = "practice_binding"
+  case practicePaste = "practice_paste"
+  case practiceOutcome = "practice_outcome"
+  case practiceValidation = "practice_validation"
 }
 
 enum PerformanceEventResult: String, Codable, CaseIterable, Sendable {
@@ -68,6 +72,155 @@ enum PerformanceEventResult: String, Codable, CaseIterable, Sendable {
   case copied
   case unverified
   case requested
+  case practiceBindingAccepted = "practice_binding_accepted"
+  case practiceBindingStepInactive = "practice_binding_step_inactive"
+  case practiceBindingWindowUnavailable = "practice_binding_window_unavailable"
+  case practiceBindingWindowHidden = "practice_binding_window_hidden"
+  case practiceBindingWindowNotKey = "practice_binding_window_not_key"
+  case practiceBindingResponderMismatch = "practice_binding_responder_mismatch"
+  case practiceBindingTextViewDetached = "practice_binding_text_view_detached"
+  case practiceBindingTextViewNotEditable = "practice_binding_text_view_not_editable"
+  case practiceBindingTextViewHidden = "practice_binding_text_view_hidden"
+  case practiceBindingSecureTarget = "practice_binding_secure_target"
+  case practiceBindingTargetMismatch = "practice_binding_target_mismatch"
+  case practicePasteObserved = "practice_paste_observed"
+  case practiceOutcomeReceived = "practice_outcome_received"
+  case practiceOutcomeStepInactive = "practice_outcome_step_inactive"
+  case practiceOutcomeTargetMatched = "practice_outcome_target_matched"
+  case practiceOutcomeTargetMismatch = "practice_outcome_target_mismatch"
+  case practiceValidationVerified = "practice_validation_verified"
+  case practiceValidationNoActiveAttempt = "practice_validation_no_active_attempt"
+  case practiceValidationAttemptMismatch = "practice_validation_attempt_mismatch"
+  case practiceValidationReadbackMismatch = "practice_validation_readback_mismatch"
+  case practiceValidationReadbackUnchanged = "practice_validation_readback_unchanged"
+  case practiceValidationPasteNotObserved = "practice_validation_paste_not_observed"
+  case practiceValidationPasteExpectationMissing = "practice_validation_paste_expectation_missing"
+  case practiceValidationGenerationInvalidated = "practice_validation_generation_invalidated"
+}
+
+/// Fixed reasons for refusing a live onboarding practice claim. They describe only native control
+/// state and never include control contents, application names, or Accessibility values.
+enum PracticeBindingRejection: Equatable {
+  case stepInactive
+  case windowUnavailable
+  case windowHidden
+  case windowNotKey
+  case responderMismatch
+  case textViewDetached
+  case textViewNotEditable
+  case textViewHidden
+  case secureTarget
+  case targetMismatch
+}
+
+/// Fixed results from comparing an onboarding control's current contents with delivery evidence.
+/// The result intentionally classifies the comparison without retaining either text value.
+enum PracticeReadbackValidation: Equatable {
+  case verified
+  case noActiveAttempt
+  case attemptMismatch
+  case readbackMismatch
+  case readbackUnchanged
+  case pasteNotObserved
+  case pasteExpectationMissing
+  case generationInvalidated
+}
+
+/// A local-only fact emitted while the onboarding exercise is active. The type is closed so UI
+/// callers cannot attach text, Accessibility values, or arbitrary rejection descriptions.
+enum PracticeDiagnosticFact: Equatable {
+  case bindingAccepted
+  case bindingRejected(PracticeBindingRejection)
+  case pasteObserved
+  case outcomeReceived
+  case outcomeStepInactive
+  case outcomeTargetMatched
+  case outcomeTargetMismatch
+  case validation(PracticeReadbackValidation)
+
+  var eventKind: PerformanceEventKind {
+    switch self {
+    case .bindingAccepted, .bindingRejected:
+      return .practiceBinding
+    case .pasteObserved:
+      return .practicePaste
+    case .outcomeReceived, .outcomeStepInactive, .outcomeTargetMatched, .outcomeTargetMismatch:
+      return .practiceOutcome
+    case .validation:
+      return .practiceValidation
+    }
+  }
+
+  var eventResult: PerformanceEventResult {
+    switch self {
+    case .bindingAccepted:
+      return .practiceBindingAccepted
+    case .bindingRejected(let rejection):
+      return rejection.eventResult
+    case .pasteObserved:
+      return .practicePasteObserved
+    case .outcomeReceived:
+      return .practiceOutcomeReceived
+    case .outcomeStepInactive:
+      return .practiceOutcomeStepInactive
+    case .outcomeTargetMatched:
+      return .practiceOutcomeTargetMatched
+    case .outcomeTargetMismatch:
+      return .practiceOutcomeTargetMismatch
+    case .validation(let validation):
+      return validation.eventResult
+    }
+  }
+}
+
+extension PracticeBindingRejection {
+  fileprivate var eventResult: PerformanceEventResult {
+    switch self {
+    case .stepInactive:
+      return .practiceBindingStepInactive
+    case .windowUnavailable:
+      return .practiceBindingWindowUnavailable
+    case .windowHidden:
+      return .practiceBindingWindowHidden
+    case .windowNotKey:
+      return .practiceBindingWindowNotKey
+    case .responderMismatch:
+      return .practiceBindingResponderMismatch
+    case .textViewDetached:
+      return .practiceBindingTextViewDetached
+    case .textViewNotEditable:
+      return .practiceBindingTextViewNotEditable
+    case .textViewHidden:
+      return .practiceBindingTextViewHidden
+    case .secureTarget:
+      return .practiceBindingSecureTarget
+    case .targetMismatch:
+      return .practiceBindingTargetMismatch
+    }
+  }
+}
+
+extension PracticeReadbackValidation {
+  fileprivate var eventResult: PerformanceEventResult {
+    switch self {
+    case .verified:
+      return .practiceValidationVerified
+    case .noActiveAttempt:
+      return .practiceValidationNoActiveAttempt
+    case .attemptMismatch:
+      return .practiceValidationAttemptMismatch
+    case .readbackMismatch:
+      return .practiceValidationReadbackMismatch
+    case .readbackUnchanged:
+      return .practiceValidationReadbackUnchanged
+    case .pasteNotObserved:
+      return .practiceValidationPasteNotObserved
+    case .pasteExpectationMissing:
+      return .practiceValidationPasteExpectationMissing
+    case .generationInvalidated:
+      return .practiceValidationGenerationInvalidated
+    }
+  }
 }
 
 /// The complete diagnostic payload. The type intentionally has no extensible metadata field.
@@ -156,6 +309,10 @@ extension PerformanceEventRecording {
       timestamp: now(),
       audioDuration: audioDuration
     )
+  }
+
+  func recordPractice(_ fact: PracticeDiagnosticFact, sessionID: UUID) {
+    record(kind: fact.eventKind, result: fact.eventResult, sessionID: sessionID)
   }
 }
 

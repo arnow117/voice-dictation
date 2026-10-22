@@ -198,6 +198,86 @@ enum OnboardingStateHarness {
       "a verified direct receipt and exact native control readback complete practice"
     )
 
+    practice.clear()
+    check(
+      practice.validatePastedReadback("typed text") == .noActiveAttempt,
+      "practice diagnostics distinguish a readback without an active attempt"
+    )
+    let diagnosticAttempt = UUID()
+    practice.beginAttempt(diagnosticAttempt, initialText: "initial text")
+    check(
+      practice.validatePastedReadback("typed text") == .pasteNotObserved,
+      "practice diagnostics distinguish typing without a paste observation"
+    )
+    check(
+      practice.notePasteRequest() == diagnosticAttempt,
+      "a paste observation remains correlated to the current random attempt"
+    )
+    check(
+      practice.validatePastedReadback("typed text") == .pasteExpectationMissing,
+      "practice diagnostics distinguish a paste without a copied-result expectation"
+    )
+    practice.expectCopiedText("expected text", attemptID: diagnosticAttempt)
+    check(
+      practice.validatePastedReadback("other text") == .readbackMismatch,
+      "practice diagnostics distinguish an exact-readback mismatch"
+    )
+    practice.expectCopiedText("initial text", attemptID: diagnosticAttempt)
+    check(
+      practice.validatePastedReadback("initial text") == .readbackUnchanged,
+      "practice diagnostics distinguish an unchanged prefilled readback"
+    )
+
+    practice.clear()
+    check(
+      practice.validateDirectReadback(
+        "value",
+        expectedText: "value",
+        attemptID: UUID(),
+        isVerifiedDirectInsertion: false
+      ) == .noActiveAttempt,
+      "direct validation diagnoses the absence of a current attempt"
+    )
+    let directDiagnosticAttempt = UUID()
+    practice.beginAttempt(directDiagnosticAttempt, initialText: "initial value")
+    check(
+      practice.validateDirectReadback(
+        "value",
+        expectedText: "value",
+        attemptID: UUID(),
+        isVerifiedDirectInsertion: false
+      ) == .attemptMismatch,
+      "direct validation rejects a different attempt identity"
+    )
+    check(
+      practice.validateDirectReadback(
+        "different value",
+        expectedText: "value",
+        attemptID: directDiagnosticAttempt,
+        isVerifiedDirectInsertion: false
+      ) == .readbackMismatch,
+      "direct validation diagnoses a nonmatching native readback"
+    )
+    check(
+      practice.validateDirectReadback(
+        "initial value",
+        expectedText: "initial value",
+        attemptID: directDiagnosticAttempt,
+        isVerifiedDirectInsertion: false
+      ) == .pasteNotObserved,
+      "unverified delivery still requires an observed paste"
+    )
+    practice.notePasteRequest()
+    check(
+      practice.validateDirectReadback(
+        "initial value",
+        expectedText: "initial value",
+        attemptID: directDiagnosticAttempt,
+        isVerifiedDirectInsertion: false
+      ) == .readbackUnchanged,
+      "unverified delivery rejects an unchanged readback after a paste event"
+    )
+
     print("onboarding state harness passed")
   }
 }

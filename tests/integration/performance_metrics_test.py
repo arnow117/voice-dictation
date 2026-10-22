@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import shutil
 import tempfile
 import unittest
@@ -23,6 +24,8 @@ MEASURE_SPEC = importlib.util.spec_from_file_location("measure", ROOT / "bench/e
 assert MEASURE_SPEC and MEASURE_SPEC.loader
 MEASURE = importlib.util.module_from_spec(MEASURE_SPEC)
 MEASURE_SPEC.loader.exec_module(MEASURE)
+
+SWIFT_EVENT_JSONL = os.environ.get("SHANSHUO_SWIFT_EVENT_JSONL")
 
 
 def event(
@@ -305,6 +308,74 @@ class PerformanceMetricsTest(unittest.TestCase):
         short = self.metric_by_name(report, "release to AX verified insertion, audio duration at most")
         self.assertEqual(short["invalid_input_lines"], 1)
         self.assertFalse(short["pass"])
+
+    def test_schema_accepts_omitted_optional_duration_but_rejects_unknown_or_missing_keys(self) -> None:
+        process_id = str(uuid.uuid4())
+        session_id = str(uuid.uuid4())
+        no_duration = event(process_id, session_id, "hotkey_pressed", "observed", 1)
+        no_duration.pop("audio_duration_ns")
+        practice_event = event(
+            process_id,
+            str(uuid.uuid4()),
+            "practice_outcome",
+            "practice_outcome_received",
+            2,
+        )
+        practice_event.pop("audio_duration_ns")
+        events, invalid_lines = REPORT_METRICS.read_events(
+            self.write_events([no_duration, practice_event])
+        )
+        self.assertEqual(invalid_lines, [])
+        self.assertEqual(len(events), 2)
+
+        missing_required = dict(no_duration)
+        missing_required.pop("kind")
+        with self.assertRaises(ValueError):
+            REPORT_METRICS.validate_event(missing_required)
+
+        unknown_key = dict(no_duration)
+        unknown_key["unexpected"] = True
+        with self.assertRaises(ValueError):
+            REPORT_METRICS.validate_event(unknown_key)
+
+        invalid_duration = dict(no_duration)
+        invalid_duration["audio_duration_ns"] = True
+        with self.assertRaises(ValueError):
+            REPORT_METRICS.validate_event(invalid_duration)
+
+        report = REPORT_METRICS.report(
+            self.arguments(
+                self.write_events([practice_event]),
+                expected_short_samples=0,
+            )
+        )
+        short = self.metric_by_name(
+            report,
+            "release to AX verified insertion, audio duration at most",
+        )
+        self.assertEqual(short["failed_samples"], 0)
+        self.assertEqual(short["unknown_duration_samples"], 0)
+        self.assertEqual(report["invalid_diagnostic_lines"], [])
+
+    @unittest.skipUnless(SWIFT_EVENT_JSONL, "Swift JSON fixture is supplied by the integration runner")
+    def test_swift_encoded_optional_duration_is_read_by_python_report(self) -> None:
+        assert SWIFT_EVENT_JSONL is not None
+        directory = Path(SWIFT_EVENT_JSONL).parent
+        raw_event = json.loads(Path(SWIFT_EVENT_JSONL).read_text(encoding="utf-8"))
+        self.assertNotIn("audio_duration_ns", raw_event)
+        self.assertEqual(raw_event["kind"], "practice_outcome")
+        self.assertEqual(raw_event["result"], "practice_outcome_received")
+
+        report = REPORT_METRICS.report(
+            self.arguments(directory, expected_short_samples=0)
+        )
+        short = self.metric_by_name(
+            report,
+            "release to AX verified insertion, audio duration at most",
+        )
+        self.assertEqual(report["invalid_diagnostic_lines"], [])
+        self.assertEqual(short["failed_samples"], 0)
+        self.assertEqual(short["unknown_duration_samples"], 0)
 
     def test_session_selection_limits_the_measurement_set(self) -> None:
         process_id = str(uuid.uuid4())

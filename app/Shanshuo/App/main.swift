@@ -247,7 +247,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         },
         openModelManagement: { [weak self] in
           self?.openModelManagement()
-        }
+        },
+        practiceDiagnostics: performanceDiagnostics
       )
       historyWindowController = HistoryWindowController(model: appModel)
       privacyWindowController = PrivacyWindowController(model: appModel)

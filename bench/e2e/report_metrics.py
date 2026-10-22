@@ -28,6 +28,10 @@ EVENT_KINDS = {
     "paste_requested",
     "unicode_requested",
     "session_finished",
+    "practice_binding",
+    "practice_paste",
+    "practice_outcome",
+    "practice_validation",
 }
 EVENT_RESULTS = {
     "observed",
@@ -40,14 +44,40 @@ EVENT_RESULTS = {
     "copied",
     "unverified",
     "requested",
+    "practice_binding_accepted",
+    "practice_binding_step_inactive",
+    "practice_binding_window_unavailable",
+    "practice_binding_window_hidden",
+    "practice_binding_window_not_key",
+    "practice_binding_responder_mismatch",
+    "practice_binding_text_view_detached",
+    "practice_binding_text_view_not_editable",
+    "practice_binding_text_view_hidden",
+    "practice_binding_secure_target",
+    "practice_binding_target_mismatch",
+    "practice_paste_observed",
+    "practice_outcome_received",
+    "practice_outcome_step_inactive",
+    "practice_outcome_target_matched",
+    "practice_outcome_target_mismatch",
+    "practice_validation_verified",
+    "practice_validation_no_active_attempt",
+    "practice_validation_attempt_mismatch",
+    "practice_validation_readback_mismatch",
+    "practice_validation_readback_unchanged",
+    "practice_validation_paste_not_observed",
+    "practice_validation_paste_expectation_missing",
+    "practice_validation_generation_invalidated",
 }
-EVENT_KEYS = {
+REQUIRED_EVENT_KEYS = {
     "schema_version",
     "kind",
     "result",
     "process_id",
     "session_id",
     "monotonic_ns",
+}
+OPTIONAL_EVENT_KEYS = {
     "audio_duration_ns",
 }
 
@@ -70,7 +100,12 @@ def read_events(directory: Path) -> tuple[list[dict[str, Any]], list[str]]:
 
 
 def validate_event(event: dict[str, Any]) -> None:
-    if not isinstance(event, dict) or set(event) != EVENT_KEYS:
+    if not isinstance(event, dict):
+        raise ValueError("diagnostic event must be an object")
+    event_keys = set(event)
+    missing_required_keys = REQUIRED_EVENT_KEYS - event_keys
+    unknown_keys = event_keys - REQUIRED_EVENT_KEYS - OPTIONAL_EVENT_KEYS
+    if missing_required_keys or unknown_keys:
         raise ValueError("event schema keys do not match the closed diagnostics schema")
     if event["schema_version"] != 1:
         raise ValueError("unsupported schema version")
@@ -80,8 +115,11 @@ def validate_event(event: dict[str, Any]) -> None:
     uuid.UUID(event["session_id"])
     if not isinstance(event["monotonic_ns"], int) or event["monotonic_ns"] < 0:
         raise ValueError("invalid monotonic timestamp")
-    if event["audio_duration_ns"] is not None and (
-        not isinstance(event["audio_duration_ns"], int) or event["audio_duration_ns"] < 0
+    audio_duration_ns = event.get("audio_duration_ns")
+    if audio_duration_ns is not None and (
+        isinstance(audio_duration_ns, bool)
+        or not isinstance(audio_duration_ns, int)
+        or audio_duration_ns < 0
     ):
         raise ValueError("invalid audio duration")
 
@@ -308,7 +346,7 @@ def summarize_verified_latency(
                 incomplete += 1
             continue
         stopped = first_event(events, "audio_stopped", "succeeded")
-        duration = stopped["audio_duration_ns"] if stopped else None
+        duration = stopped.get("audio_duration_ns") if stopped else None
         if duration is None:
             unknown_duration += 1
             if finished and finished["result"] in {"failed", "cancelled", "unverified", "copied"}:

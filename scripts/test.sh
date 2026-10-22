@@ -28,6 +28,9 @@ bash "$ROOT/tests/integration/run_performance_diagnostics_harness.sh"
 echo "== performance metric report tests"
 bash "$ROOT/tests/integration/run_performance_metrics_test.sh"
 
+echo "== fixture playback measurement tests"
+bash "$ROOT/tests/integration/run_measure_e2e_test.sh"
+
 echo "== hotkey configuration harness"
 bash "$ROOT/tests/integration/run_hotkey_configuration_harness.sh"
 

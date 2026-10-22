@@ -20,9 +20,42 @@ private struct FailingPerformancePermissions: PerformanceFilePermissionsApplying
   }
 }
 
+private final class RecordingPerformanceDiagnostics: PerformanceEventRecording {
+  let processID = UUID()
+  private(set) var events: [PerformanceDiagnosticEvent] = []
+
+  func now() -> MonotonicTimestamp {
+    MonotonicTimestamp(nanoseconds: UInt64(events.count + 1))
+  }
+
+  func record(
+    kind: PerformanceEventKind,
+    result: PerformanceEventResult,
+    sessionID: UUID,
+    timestamp: MonotonicTimestamp,
+    audioDuration: TimeInterval?
+  ) {
+    events.append(
+      PerformanceDiagnosticEvent(
+        kind: kind,
+        result: result,
+        processID: processID,
+        sessionID: sessionID,
+        timestamp: timestamp,
+        audioDuration: audioDuration
+      )
+    )
+  }
+}
+
 @main
 enum PerformanceDiagnosticsHarness {
   static func main() {
+    if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--emit-jsonl" {
+      emitProductionJSONL(to: URL(fileURLWithPath: CommandLine.arguments[2]))
+      return
+    }
+
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
       "shanshuo-performance-diagnostics-\(UUID().uuidString)",
       isDirectory: true
@@ -66,6 +99,41 @@ enum PerformanceDiagnosticsHarness {
     check(
       verifiedJSON.contains("\"verified_insertion\""),
       "closed result names use the report's stable snake-case schema"
+    )
+    let practiceFacts: [(PracticeDiagnosticFact, PerformanceEventKind, PerformanceEventResult)] = [
+      (.bindingAccepted, .practiceBinding, .practiceBindingAccepted),
+      (
+        .bindingRejected(.responderMismatch),
+        .practiceBinding,
+        .practiceBindingResponderMismatch
+      ),
+      (.pasteObserved, .practicePaste, .practicePasteObserved),
+      (.outcomeReceived, .practiceOutcome, .practiceOutcomeReceived),
+      (.outcomeTargetMatched, .practiceOutcome, .practiceOutcomeTargetMatched),
+      (.outcomeTargetMismatch, .practiceOutcome, .practiceOutcomeTargetMismatch),
+      (
+        .validation(.readbackUnchanged),
+        .practiceValidation,
+        .practiceValidationReadbackUnchanged
+      ),
+      (
+        .validation(.attemptMismatch),
+        .practiceValidation,
+        .practiceValidationAttemptMismatch
+      ),
+    ]
+    for (fact, expectedKind, expectedResult) in practiceFacts {
+      check(
+        fact.eventKind == expectedKind && fact.eventResult == expectedResult,
+        "practice diagnostics map each fixed fact to a closed event"
+      )
+    }
+    let practiceRecorder = RecordingPerformanceDiagnostics()
+    practiceRecorder.recordPractice(.validation(.readbackMismatch), sessionID: sessionID)
+    check(
+      practiceRecorder.events.map { $0.kind } == [.practiceValidation]
+        && practiceRecorder.events.map { $0.result } == [.practiceValidationReadbackMismatch],
+      "production recordPractice emits only the fixed validation event"
     )
 
     let capped = BoundedPerformanceEventLog(
@@ -117,5 +185,23 @@ enum PerformanceDiagnosticsHarness {
 
     check(ProcessStartTimestamp.currentProcess() != nil, "process start comes from proc_pid_rusage")
     print("performance diagnostics harness passed")
+  }
+
+  private static func emitProductionJSONL(to outputURL: URL) {
+    let event = PerformanceDiagnosticEvent(
+      kind: .practiceOutcome,
+      result: .practiceOutcomeReceived,
+      processID: UUID(),
+      sessionID: UUID(),
+      timestamp: MonotonicTimestamp(nanoseconds: 42)
+    )
+    do {
+      var data = try JSONEncoder().encode(event)
+      data.append(0x0A)
+      try data.write(to: outputURL, options: .atomic)
+    } catch {
+      fputs("FAIL: could not write production JSONL fixture\n", stderr)
+      exit(1)
+    }
   }
 }

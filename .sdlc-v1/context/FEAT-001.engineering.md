@@ -468,3 +468,13 @@ T015 测量代码返回后，主 Agent 安排既有独立 reviewer 只读复核�
 ### T015 测量实现的主 Agent 验收（2026-10-22）
 
 主 Agent 复核七项确定性纠正：独立 attempt 的 busy/拒绝终态及匹配 release、prepare 同步撤销旧 readiness、诊断存储权限失败拒绝写入、shortcut-test 状态进入去重投影、缺 release/stop/时长与无效行保留失败分母、冷启动按 maximum 判定，以及 engine queue 的实际 start/stop 边界。复核相应生产路径与 harness，另实际执行 `bash tests/integration/run_performance_metrics_test.sh`，8 项通过；`git diff --check` exit 0。接受签名构建 `20261022-145800` 的这份测量实现；复用同代码/环境的 worker 全量 `SKIP_ASR=1 bash scripts/test.sh` exit 0 证据，不重复未变的长 ASR。T015 继续 in_progress，真实性能、系统安全与八应用矩阵未完成，不代表 NFR 通过。CUA 现已重新取得欢迎窗口的快捷键步骤，锁屏阻塞已解除，后续从新构建继续系统整合。
+
+### T015 真机练习与播放器新证据（2026-10-22）
+
+固定 `145800` 的首次真实麦克风与 120 秒引导可见空闲结果见 `docs/validation/native-system-145800.md`。用户物理右 Option 已使引导显示真实按下/松开并进入练习。第一次测试播放器在沙箱内报 `AudioQueueStart failed (-66680)`，辅助工具使用未等待的 Popen 因而仍 exit 0；回执仅称 requested，不能当作已经播放。沙箱外单独 afplay 同一公开 5 秒音频 exit 0，随后真实首缓冲触发的沙箱外重试经用户确认听到播放。
+
+完整重试 session `7479B290-3F6B-4EB2-86C4-C9CE90ED695A` 实际录制 6.585 秒，记录 recognition_delivered、paste_requested 与 unverified 终态，CUA 看到公开音频的识别文本已经进入练习控件；超过一分钟后按钮仍为 disabled。以该随机 session UUID 只读查询历史 count=0，没有读取或存储文本。该结果证明真实闭环部分运行，但练习完成仍失败，不能作为验收通过。现有静态分析不能确定是 purpose/target、paste 回调还是精确读回拒绝；同一 worker 先补最小固定枚举诊断和生产 harness，取得可区分的事实后再修正，不放宽手输/预填/attempt 与安全校验，不把练习写入历史。播放器另需等待并验证子进程退出，以及区分 Python 与 app mach 单调时钟域；两者当前 epoch 不同，不能直接相减。此为新观察后的有限范围排查，未出现连续两轮无新证据的非收敛触发。
+
+随后对真实生产日志运行 `report_metrics.py`，发现 Swift Optional nil 省略 `audio_duration_ns`，而 Python 固定键集合要求它存在，导致合法的 process/ready/hotkey 等事件被拒绝，仅有时长的 stop 被接收。旧 Python 夹具均显式写 null，未覆盖生产编码边界。schema_version 1 的有效契约据此明确为六个必需键与唯一可选的 `audio_duration_ns`；后者缺省/null 均代表未知，未知额外键或缺少必需键仍拒绝。同一 worker 修正 reader 并补真实 Swift 序列化到 Python 读取的回归；不删除旧日志或忽略 invalid，不把格式失败当作性能失败样本消失。三次启动和 CPU 的原始算术证据保留，自动汇总在修正前不可用于通过声明。
+
+worker 返回签名构建 `20261022-155005`：播放器等待退出并返回真实失败，时钟域显式区分；Python 10 项含真实 Swift 编码回归、受控播放器进程、diagnostics/Coordinator/Onboarding/native-window harness、formatter 与 `SKIP_ASR=1 bash scripts/test.sh` 均 exit 0。主 Agent 复核差异后，实际用修正 reader 重新读取原始 145800 日志，85 个事件、invalid=0，cold maximum=4102.56425 ms/3 成功；没有将其他缺失指标改为通过。练习只增加固定枚举观察与同一 attempt UUID，未猜测修正或放宽验证条件；其根因仍待新构建实际区分。接受这份有界诊断/测量修正的 build，T015 保持进行中。

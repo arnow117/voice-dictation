@@ -113,17 +113,47 @@ def measure_playback_latency(args: argparse.Namespace) -> int:
                 continue
 
             requested_at_ns = time.monotonic_ns()
-            subprocess.Popen(["afplay", str(fixture)])
             report = {
-                "kind": "fixture_playback_requested",
+                "kind": "fixture_playback",
                 "trigger": "production_audio_first_buffer",
                 "diagnostic_process_id": event.get("process_id"),
                 "diagnostic_session_id": event.get("session_id"),
                 "first_buffer_monotonic_ns": event.get("monotonic_ns"),
+                "first_buffer_clock": "app_mach_absolute_time_nanoseconds",
                 "playback_request_monotonic_ns": requested_at_ns,
+                "playback_request_clock": "python_time_monotonic_ns",
+                "playback_status": "requested",
                 "fixture": str(fixture),
             }
             write_json(args.output, report)
+            try:
+                player = subprocess.Popen([str(args.player), str(fixture)])
+            except OSError as error:
+                report["playback_status"] = "request_failed"
+                report["playback_error_kind"] = type(error).__name__
+                report["playback_completed_monotonic_ns"] = time.monotonic_ns()
+                report["playback_completed_clock"] = "python_time_monotonic_ns"
+                write_json(args.output, report)
+                raise RuntimeError("fixture player could not be started") from error
+
+            try:
+                exit_code = player.wait(timeout=args.playback_timeout_seconds)
+            except subprocess.TimeoutExpired as error:
+                player.kill()
+                player.wait()
+                report["playback_status"] = "timed_out"
+                report["playback_completed_monotonic_ns"] = time.monotonic_ns()
+                report["playback_completed_clock"] = "python_time_monotonic_ns"
+                write_json(args.output, report)
+                raise RuntimeError("fixture player did not exit before the timeout") from error
+
+            report["playback_exit_code"] = exit_code
+            report["playback_completed_monotonic_ns"] = time.monotonic_ns()
+            report["playback_completed_clock"] = "python_time_monotonic_ns"
+            report["playback_status"] = "completed" if exit_code == 0 else "failed"
+            write_json(args.output, report)
+            if exit_code != 0:
+                raise RuntimeError(f"fixture player exited with status {exit_code}")
             print(json.dumps(report, ensure_ascii=False, indent=2))
             return 0
         time.sleep(0.05)
@@ -155,6 +185,8 @@ def parse_arguments() -> argparse.Namespace:
     latency.add_argument("--output", type=Path, required=True)
     latency.add_argument("--process-id")
     latency.add_argument("--timeout-seconds", type=float, default=30)
+    latency.add_argument("--player", type=Path, default=Path("/usr/bin/afplay"))
+    latency.add_argument("--playback-timeout-seconds", type=float, default=60)
     latency.set_defaults(run=measure_playback_latency)
 
     return parser.parse_args()

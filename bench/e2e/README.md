@@ -52,8 +52,9 @@
 
 ## 扬声器到真实麦克风夹具
 
-主 checkout 的 .work/bench-data/latency/lat-05s-00.wav 至 lat-30s-09.wav 以及
-latency.jsonl 是可复用的合成时长夹具。它们可由已有本地 clips 重新构造：
+主 checkout 的 `.work/bench-data/latency/lat-05s-00.wav` 至
+`.work/bench-data/latency/lat-30s-09.wav`，以及 `.work/bench-data/latency.jsonl`
+是可复用的合成时长夹具。它们可由已有本地 clips 重新构造：
 
     uv run --project bench/asr python bench/asr/run_bench.py make-latency \
       --data .work/bench-data
@@ -70,4 +71,8 @@ audio_first_buffer 事件后调用 afplay 播放给当前扬声器路由：
       --audio .work/bench-data/latency/lat-15s-00.wav \
       --output .work/validation/fixture-playback.json
 
-之后使用 report_metrics.py 汇总。这些命令不预填成功率、计时值或 PASS。
+回执先记录 `playback_status: requested`；只有播放器以 exit 0 退出后才更新为
+`completed`。启动失败、非零退出或超时都会使该命令非零退出，不能作为已播放样本。
+`first_buffer_monotonic_ns` 来自应用的 mach absolute-time 纳秒域，播放器请求和完成时间
+来自 Python `time.monotonic_ns` 域；两者的 epoch 不同，回执只用于顺序审计，不能直接相减
+计算延迟。之后使用 report_metrics.py 汇总。这些命令不预填成功率、计时值或 PASS。

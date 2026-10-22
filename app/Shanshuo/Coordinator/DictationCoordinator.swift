@@ -178,7 +178,8 @@ final class DictationCoordinator {
   /// The onboarding window supplies a binding only while its exact native practice control is
   /// visible and first responder. Querying this on every press avoids carrying a stale "armed"
   /// exception across a cancelled, silent, or short practice attempt.
-  private var onboardingPracticeBindingProvider: ((TargetSnapshot) -> PracticeSessionBinding?)?
+  private var onboardingPracticeBindingProvider:
+    ((TargetSnapshot, UUID) -> PracticeSessionBinding?)?
 
   init(
     permissions: PermissionProviding,
@@ -268,9 +269,10 @@ final class DictationCoordinator {
   }
 
   /// Installs the onboarding-owned live practice check. The provider is asked for every new
-  /// press, rather than retaining a previous focus snapshot after a practice attempt finishes.
+  /// press with the coordinator's new attempt ID, rather than retaining a previous focus snapshot
+  /// after a practice attempt finishes.
   func setOnboardingPracticeBindingProvider(
-    _ provider: @escaping (TargetSnapshot) -> PracticeSessionBinding?
+    _ provider: @escaping (TargetSnapshot, UUID) -> PracticeSessionBinding?
   ) {
     requireMainThread()
     onboardingPracticeBindingProvider = provider
@@ -436,7 +438,7 @@ final class DictationCoordinator {
       shortcut: shortcut,
       insertionMode: permissions.accessibilityPermission.isAuthorized
         ? .directInsertion : .copyOnly,
-      purpose: claimedPurpose(for: pressTarget.target)
+      purpose: claimedPurpose(for: pressTarget.target, attemptID: attemptID)
     )
     activeSession = session
     secureInputLatched = false
@@ -930,8 +932,9 @@ final class DictationCoordinator {
     )
   }
 
-  private func claimedPurpose(for pressTarget: TargetSnapshot) -> SessionPurpose {
-    guard let binding = onboardingPracticeBindingProvider?(pressTarget),
+  private func claimedPurpose(for pressTarget: TargetSnapshot, attemptID: UUID) -> SessionPurpose {
+    guard let binding = onboardingPracticeBindingProvider?(pressTarget, attemptID),
+      binding.attemptID == attemptID,
       binding.matches(pressTarget)
     else {
       return .dictation

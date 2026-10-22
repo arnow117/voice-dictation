@@ -404,9 +404,10 @@ final class AppModel {
 
   /// Installs the onboarding window's live first-responder check. The provider runs immediately
   /// before every hold begins, so retrying after Esc, silence, or a short press cannot reuse a
-  /// stale practice claim.
+  /// stale practice claim. The coordinator supplies the new attempt ID so every resulting
+  /// diagnostic event can be correlated without using focus metadata.
   func setOnboardingPracticeBindingProvider(
-    _ provider: @escaping (TargetSnapshot) -> PracticeSessionBinding?
+    _ provider: @escaping (TargetSnapshot, UUID) -> PracticeSessionBinding?
   ) {
     requireMainThread()
     coordinator.setOnboardingPracticeBindingProvider(provider)

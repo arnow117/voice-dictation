@@ -441,12 +441,12 @@ private final class FakeLivePracticeControl {
     self.target = target
   }
 
-  func binding(for pressTarget: TargetSnapshot) -> PracticeSessionBinding? {
+  func binding(for pressTarget: TargetSnapshot, attemptID: UUID) -> PracticeSessionBinding? {
     bindingRequests += 1
     guard isExactFirstResponder else {
       return nil
     }
-    let binding = PracticeSessionBinding(target: target)
+    let binding = PracticeSessionBinding(target: target, attemptID: attemptID)
     return binding.matches(pressTarget) ? binding : nil
   }
 }
@@ -931,8 +931,8 @@ private func testOutcomeAndMicrophoneTestBoundaries() {
 
   let practiceHarness = Harness()
   let practiceControl = FakeLivePracticeControl(target: practiceHarness.focus.current.target)
-  practiceHarness.coordinator.setOnboardingPracticeBindingProvider { pressTarget in
-    practiceControl.binding(for: pressTarget)
+  practiceHarness.coordinator.setOnboardingPracticeBindingProvider { pressTarget, attemptID in
+    practiceControl.binding(for: pressTarget, attemptID: attemptID)
   }
   practiceHarness.pressAndRelease()
   practiceHarness.recognizer.complete(.success("practice text"))
@@ -940,6 +940,17 @@ private func testOutcomeAndMicrophoneTestBoundaries() {
     check(false, "a matching focused practice control tags only its own session")
     return
   }
+  guard
+    case .onboardingPractice(let binding)? = practiceHarness.outcomeObserver.outcomes.first?.purpose,
+    let outcomeSessionID = practiceHarness.outcomeObserver.outcomes.first?.sessionID
+  else {
+    check(false, "a claimed practice outcome includes an attempt identity")
+    return
+  }
+  check(
+    binding.attemptID == outcomeSessionID,
+    "the live practice binding uses the coordinator attempt identity for outcome correlation"
+  )
   check(
     practiceHarness.outcomeObserver.outcomes.first?.isPersistableInHistory == false,
     "a verified onboarding practice outcome is excluded from history persistence"
@@ -955,8 +966,8 @@ private func testOutcomeAndMicrophoneTestBoundaries() {
       isSecure: false
     )
   )
-  unrelatedHarness.coordinator.setOnboardingPracticeBindingProvider { pressTarget in
-    unrelatedControl.binding(for: pressTarget)
+  unrelatedHarness.coordinator.setOnboardingPracticeBindingProvider { pressTarget, attemptID in
+    unrelatedControl.binding(for: pressTarget, attemptID: attemptID)
   }
   unrelatedHarness.pressAndRelease()
   unrelatedHarness.recognizer.complete(.success("ordinary text"))
@@ -1082,8 +1093,8 @@ private func testPracticeBindingIsLiveForEveryRetry() {
   func makePracticeHarness() -> (Harness, FakeLivePracticeControl) {
     let harness = Harness()
     let control = FakeLivePracticeControl(target: harness.focus.current.target)
-    harness.coordinator.setOnboardingPracticeBindingProvider { pressTarget in
-      control.binding(for: pressTarget)
+    harness.coordinator.setOnboardingPracticeBindingProvider { pressTarget, attemptID in
+      control.binding(for: pressTarget, attemptID: attemptID)
     }
     return (harness, control)
   }
@@ -1250,8 +1261,8 @@ private func testHotkeyRebindCancelsHeldSession() {
 
 private func testClosingPracticeCancelsOnlyTheClaimedSession() {
   func configurePractice(_ harness: Harness) {
-    harness.coordinator.setOnboardingPracticeBindingProvider { target in
-      PracticeSessionBinding(target: target)
+    harness.coordinator.setOnboardingPracticeBindingProvider { target, attemptID in
+      PracticeSessionBinding(target: target, attemptID: attemptID)
     }
   }
 
