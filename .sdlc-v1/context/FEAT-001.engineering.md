@@ -349,7 +349,21 @@ sequenceDiagram
 
 用户随后澄清：“在 codex 里面不能输入，但在备忘录里面 OK 的”。据此确认当前已安装版本、新 Fn／🌐 配置的真实听写输入在备忘录成功；Codex 聊天输入框为明确的应用兼容性失败。未把 unverified 日志冒充成功，也未声称 Codex 或完整矩阵通过；按 DEC-025 将这一具体兼容性限制及备忘录中转方式写入 README、已知问题和 Release 说明，继续交付该可用测试版，不扩大为新的插入诊断工程。
 
-尚未开始。
+### 最终 validate：DEC-025 安装 beta（`2e2144094d767a2dd4be785da53f356ade8dcd45`，2026-10-22）
+
+本轮只验证当前可安装测试版范围，不恢复已暂停的冷启动或设置页工作。第一次在沙箱执行 `SHANSHUO_VENDOR_CACHE=<main .work/vendor> SKIP_ASR=1 bash scripts/test.sh` 因 loopback `ThreadingHTTPServer` 被拒绝而 exit 1；同一命令在授权环境重跑 exit 0：13 个 Swift 核心测试、dev build、Coordinator、TextInserter、快捷键、音频、模型与 downloader（含本地 HTTP）等全部现有 native harness 通过。`bash scripts/release/verify_archives.sh <final ZIP> <final DMG> SHA256SUMS.txt` exit 0：校验和、ZIP 解包、DMG 只读挂载和正常卸载、严格深度签名、Hardened Runtime、audio-input entitlement、arm64、系统动态库、无开发模型键/私有路径/模型或音频、17 个 licenses 与包内 Markdown 链接均通过。
+
+最终 ZIP/DMG SHA-256 分别为 `a7296765d863b600383b5b1054b7b10466c090ec434f0f5726a5fce1be94d162` / `eb112a9a153ddd6feb5988da3756849593649d60d36b5e91a3a17d6210c37847`；两包直接读到 `0.1.0/1.0.1`，可执行文件 SHA-256 均为 `64e43ec79ed67b33087a687c2b21424f93a02f0c48aef04dc5e90dbbb3d2bc38`。已安装同一可执行文件的既有实机证据确认 Fn／🌐 在备忘录可输入；Codex 聊天框不能自动写入，包内 README、known issues 和 release notes 均已披露。
+
+| DEC-025 必要条件 | 结果 | 本轮或同一候选证据 |
+|---|---|---|
+| 构建、核心会话、取消/安全输入/焦点与剪贴板所有权回归 | COVERED | 本轮完整 native test；Coordinator 与 TextInserter production harness 通过 |
+| 模型可用 | COVERED | 既有安装记录的 6 个清单文件、987,015,347 bytes 和 SHA 校验；同一二进制公开 CLI smoke 成功 |
+| 可验证安装包与签名 | COVERED | 本轮 archive verifier 与 ZIP/DMG 直接 metadata/hash 检查 |
+| 实际使用核心闭环 | COVERED（DEC-025 范围） | 既有原生练习通过及用户确认安装版 Fn／🌐→备忘录输入成功 |
+| 原始性能/全兼容性质量指标 | PARTIAL，已披露 | 冷启动 9.11 秒、八应用八十次矩阵与 ≥98% 未完成、Codex 自动插入失败；不作为本 beta 通过声明 |
+
+DEC-024 的 120 条原始评测未重跑：中文 CER 6.48% 与混说 MER 12.94% 仅按该例外随包披露，原 NFR-003 仍未通过。运行时模型 metadata 本轮不可取得，未声称重新核验。当前业务代码工作树干净；`.sdlc-v1/project.md` 为并发中的上下文更新，未由 validate 改写。
 
 ## 评审记录（实际）
 

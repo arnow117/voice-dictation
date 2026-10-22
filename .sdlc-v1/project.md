@@ -34,8 +34,8 @@
 |---|---|---|
 | 启动 | `open <main checkout>/.work/build/Shanshuo.app` | 构建产物在主 checkout 的 `.work/build/`，不入库 |
 | 主流程 | `AppDelegate` → `DictationCoordinator` → 平台协议适配器、`Qwen3ASRService` → `Qwen3ChunkDecoder` / `Qwen3Recognizer` | Coordinator 为主线程会话所有者；ASR 在唯一 userInitiated 串行队列加载、使用与卸载（ED-002、ED-014，源码 `500ec4c`） |
-| 配置 | `Info.plist` 由 `scripts/build.sh` 生成；`ShanshuoDevModelDir` 仅开发构建写入；环境变量 `SHANSHUO_MODEL_DIR` 覆盖模型目录（测试用） | 不含 secret |
-| 身份、权限或外部凭据 | 代码签名身份"Shanshuo Test Signing"，专用钥匙串 `<main checkout>/.work/signing/`（不入库）；运行时需要麦克风与辅助功能权限 | 钥匙串密码文件只在本机 `.work/signing/`，不入库 |
+| 配置 | `Info.plist` 由 `scripts/build.sh` 生成；release 省略 `ShanshuoDevModelDir`，版本为 `0.1.0/1.0.1`，时间另存 `ShanshuoBuildTimestamp`；环境变量 `SHANSHUO_MODEL_DIR` 只供开发测试覆盖 | 不含 secret |
+| 身份、权限或外部凭据 | 公共源码默认 ad-hoc 开发构建，可指定自己的签名身份；项目 release 显式使用既有 "Shanshuo Test Signing"，通过 `SHANSHUO_SIGNING_DIR` 或独立 keychain/password-file 路径提供本地资源 | 私钥和密码文件不入库，缺失 release 签名配置必须失败 |
 
 ## 常用命令
 
@@ -55,7 +55,7 @@ commands:
 |---|---|
 | 方式与工具 | Swift Testing（单元）；`tests/integration/asr_smoke.py`（uv，调用构建产物识别 8 条夹具，按类别检查错误率）；手测清单 `spikes/platform/CHECKLIST.md`。XCUITest 不可用（无 Xcode 工程，ED-017）。 |
 | 测试资产 | `bench/asr/testset.jsonl`（入库）；音频与模型在主 checkout `.work/bench-data/`、`.work/models/`，由 `bench/asr/prepare_data.py` 与 `spikes/model-download/download.py` 重建。 |
-| 目标环境 | 开发机 Apple M5 / 16 GB / macOS 26.4（DEC-019）；被测构建以 `CFBundleVersion`（构建时间戳）识别，菜单栏首项显示。 |
+| 目标环境 | 开发机 Apple M5 / 16 GB / macOS 26.4.1（DEC-019）；安装候选用 `CFBundleShortVersionString`、合法数字 `CFBundleVersion` 和独立 `ShanshuoBuildTimestamp` 识别。 |
 | 模型与测试身份 | Qwen3-ASR-0.6B int8（`sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25`，SHA-256 见 `spikes/model-download/models.json`）；无云端凭据。 |
 | 运行产物 | `.work/build/`、`.work/spm/`（gitignore）；评测结果 `bench/asr/results/`、报告 `bench/asr/reports/`（入库）。 |
 | CI | none |
