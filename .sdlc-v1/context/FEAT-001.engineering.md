@@ -384,6 +384,12 @@ Coordinator harness 以生产 `DictationCoordinator.swift` 编译，覆盖无周
 
 T010 重新打开，由同一 core_delivery worker 完成有界修正与生产 harness；使用现有 isMicrophoneTestActive 保持停止期互斥，权限按上方明确的原会话模式处理。必须覆盖无周期 refresh 的撤权时序、延迟粘贴撤权、无 AX 的合法 copy-only，以及停止回调之前热键无第二次 start。随后 T016 重新生成发行包，最终 validate/review 绑定新版本，不发布旧候选文件。
 
+### 修正版最终 review：`930c7fee`（2026-10-22）
+
+独立 reviewer 对两项 P2 和受影响的相邻路径回审，确认原会话权限 policy 贯穿识别交付、开始写入、延迟粘贴/复制与 outcome 发布，原本 copy-only 仍可无辅助功能；现有 isMicrophoneTestActive 覆盖停止中的测试。新增生产 harness 覆盖原失败顺序和相邻回归，本次没有未处理的必须修复项，请求 approved。主 Agent 已复核实现差异及对应的最终 validate 原始日志，接受此结论。本次 diff 未发现有证据支持的重复实现或可避免工程债。
+
+回审实际执行 validation→HEAD 业务差异、业务工作树干净、修正 diff whitespace 和最终资产 SHA 检查，均 exit 0；没有重跑测试或声称新真人听写。`1.0.2` 实际安装/就绪/公开 CLI、旧 Notes 人工结果的适用边界，以及 DEC-024/025 的原指标与 Codex 等限制继续如上披露。
+
 ## 发布与观察记录（实际）
 
 尚未开始。

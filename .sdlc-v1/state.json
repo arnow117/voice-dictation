@@ -12,11 +12,11 @@
       },
       "requirement_id": "REQ-001",
       "review": {
-        "at": null,
-        "by": null,
-        "decision": "pending"
+        "at": "2026-10-22T12:14:18Z",
+        "by": "independent-reviewer",
+        "decision": "approved"
       },
-      "status": "validated",
+      "status": "reviewed",
       "tasks": {
         "T001": {
           "depends_on": [],
@@ -174,7 +174,7 @@
           "updated_at": "2026-10-22T12:07:03Z"
         }
       },
-      "updated_at": "2026-10-22T12:11:03Z",
+      "updated_at": "2026-10-22T12:14:18Z",
       "validation": {
         "at": "2026-10-22T12:11:03Z",
         "command": "SHANSHUO_VENDOR_CACHE=/Users/arnow117/hansen_agent_team/workspace/20261021-voice-dictation/.work/vendor SKIP_ASR=1 bash scripts/test.sh",
@@ -195,7 +195,7 @@
       "product_context_ref": ".sdlc-v1/context/REQ-001.product.md",
       "status": "validated",
       "title": "按住快捷键语音输入核心闭环",
-      "updated_at": "2026-10-22T12:11:03Z"
+      "updated_at": "2026-10-22T12:14:18Z"
     },
     "REQ-002": {
       "created_at": "2026-10-21T11:25:28Z",
