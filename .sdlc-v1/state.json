@@ -127,9 +127,9 @@
             "T008"
           ],
           "id": "T012",
-          "status": "todo",
+          "status": "done",
           "title": "模型管理",
-          "updated_at": "2026-10-21T21:15:00+08:00"
+          "updated_at": "2026-10-22T04:36:31Z"
         },
         "T013": {
           "depends_on": [
@@ -174,7 +174,7 @@
           "updated_at": "2026-10-21T21:15:00+08:00"
         }
       },
-      "updated_at": "2026-10-22T04:17:56Z",
+      "updated_at": "2026-10-22T04:36:31Z",
       "validation": {
         "at": null,
         "command": null,
@@ -195,7 +195,7 @@
       "product_context_ref": ".sdlc-v1/context/REQ-001.product.md",
       "status": "in_delivery",
       "title": "按住快捷键语音输入核心闭环",
-      "updated_at": "2026-10-22T04:17:56Z"
+      "updated_at": "2026-10-22T04:36:31Z"
     },
     "REQ-002": {
       "created_at": "2026-10-21T11:25:28Z",

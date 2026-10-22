@@ -13,20 +13,24 @@ enum Qwen3ChunkDecoder {
   static func decode(
     samples: [Float],
     sampleRate: Int,
-    recognizer: Qwen3Recognizer,
-    hotwords: [String] = []
+    hotwords: [String] = [],
+    shouldContinue: () -> Bool = { true },
+    decodeChunk: ([Float], Int, [String]) -> String
   ) -> Qwen3ChunkDecodingResult {
     let ranges = AudioChunking.ranges(sampleCount: samples.count, sampleRate: sampleRate)
     var transcripts: [String] = []
     var decodedChunkCount = 0
 
     for range in ranges {
+      guard shouldContinue() else {
+        break
+      }
       let chunk = Array(samples[range])
       guard AudioChunking.hasAudibleSignal(chunk) else {
         continue
       }
       decodedChunkCount += 1
-      let rawText = recognizer.transcribe(chunk, sampleRate: sampleRate, hotwords: hotwords)
+      let rawText = decodeChunk(chunk, sampleRate, hotwords)
       if let transcript = TranscriptCleaner.clean(rawText) {
         transcripts.append(transcript)
       }
@@ -36,6 +40,22 @@ enum Qwen3ChunkDecoder {
       text: AudioChunking.join(transcripts),
       chunkCount: ranges.count,
       decodedChunkCount: decodedChunkCount
+    )
+  }
+
+  static func decode(
+    samples: [Float],
+    sampleRate: Int,
+    recognizer: Qwen3Recognizer,
+    hotwords: [String] = []
+  ) -> Qwen3ChunkDecodingResult {
+    decode(
+      samples: samples,
+      sampleRate: sampleRate,
+      hotwords: hotwords,
+      decodeChunk: { chunk, chunkSampleRate, chunkHotwords in
+        recognizer.transcribe(chunk, sampleRate: chunkSampleRate, hotwords: chunkHotwords)
+      }
     )
   }
 }

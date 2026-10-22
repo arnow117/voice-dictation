@@ -25,6 +25,21 @@ bash "$ROOT/tests/integration/run_coordinator_harness.sh"
 echo "== text inserter harness"
 bash "$ROOT/tests/integration/run_text_inserter_harness.sh"
 
+echo "== screen geometry harness"
+bash "$ROOT/tests/integration/run_screen_geometry_harness.sh"
+
+echo "== ASR cancellation harness"
+bash "$ROOT/tests/integration/run_asr_cancellation_harness.sh"
+
+echo "== model manager harness"
+bash "$ROOT/tests/integration/run_model_manager_harness.sh"
+
+echo "== model downloader harness"
+bash "$ROOT/tests/integration/run_model_downloader_harness.sh"
+
+echo "== model downloader local HTTP harness"
+bash "$ROOT/tests/integration/run_model_downloader_http_harness.sh"
+
 if [ "${SKIP_ASR:-0}" != 1 ]; then
   echo "== ASR smoke (app --transcribe, model $WORK/models/qwen3-asr-0.6b-int8)"
   SHANSHUO_MODEL_DIR="$WORK/models/qwen3-asr-0.6b-int8" UV_CACHE_DIR="${UV_CACHE_DIR:-$HOME/.cache/uv}" \

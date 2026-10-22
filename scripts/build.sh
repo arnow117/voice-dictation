@@ -32,6 +32,7 @@ swiftc -O -swift-version 6 -target $TARGET -module-cache-path "$OUT/.mc" -parse-
 # 2. App bundle.
 rm -rf "$STAGE"
 mkdir -p "$STAGE/Contents/MacOS" "$STAGE/Contents/Resources"
+cp "$ROOT/app/Shanshuo/Models/Qwen3ModelManifest.json" "$STAGE/Contents/Resources/"
 cat > "$STAGE/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -67,7 +68,7 @@ swiftc -O -swift-version 5 -target $TARGET -module-cache-path "$OUT/.mc" -module
   -lsherpa-onnx-fstfar -lsherpa-onnx-fst -lkaldi-native-fbank-core -lkissfft-float -lssentencepiece_core \
   -lonnxruntime -lc++ \
   -framework AppKit -framework Carbon -framework ApplicationServices -framework AVFoundation \
-  -framework Accelerate -framework CoreML -framework Foundation \
+  -framework Accelerate -framework CoreML -framework CryptoKit -framework Foundation \
   "${SRCS[@]}" -o "$STAGE/Contents/MacOS/Shanshuo"
 
 security unlock-keychain -p "$(cat "$SIGN_DIR/keychain-password")" "$SIGN_DIR/shanshuo-signing.keychain-db"

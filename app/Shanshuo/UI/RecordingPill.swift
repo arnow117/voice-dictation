@@ -228,8 +228,14 @@ final class RecordingPill: RecordingIndicating {
     guard AXValueGetValue(position, .cgPoint, &point) else {
       return nil
     }
-    let desktopTop = NSScreen.screens.map { $0.frame.maxY }.max() ?? 0
-    let appKitPoint = NSPoint(x: point.x + 20, y: desktopTop - point.y - 20)
+    guard let primaryScreen = NSScreen.screens.first else {
+      return nil
+    }
+    let accessibilityPoint = CGPoint(x: point.x + 20, y: point.y + 20)
+    let appKitPoint = RecordingPillGeometry.appKitPoint(
+      fromAccessibilityPoint: accessibilityPoint,
+      primaryScreenFrame: primaryScreen.frame
+    )
     return NSScreen.screens.first { $0.frame.contains(appKitPoint) }
   }
 

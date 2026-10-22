@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import ShanshuoCore
 
@@ -66,8 +67,16 @@ protocol AudioCapturing: AnyObject {
 protocol ASRRecognizing: AnyObject {
   var isReady: Bool { get }
   func load(completion: @escaping (Result<Void, Error>) -> Void)
-  func transcribe(_ audio: CapturedAudio, completion: @escaping (Result<String, Error>) -> Void)
+  @discardableResult
+  func transcribe(
+    _ audio: CapturedAudio,
+    completion: @escaping (Result<String, Error>) -> Void
+  ) -> ASRTranscriptionOperation
   func unload()
+}
+
+protocol ASRTranscriptionOperation: AnyObject {
+  func cancel()
 }
 
 struct InsertionReceipt {
@@ -233,17 +242,32 @@ private final class FakeAudio: AudioCapturing {
 }
 
 private final class FakeRecognizer: ASRRecognizing {
+  final class Operation: ASRTranscriptionOperation {
+    fileprivate(set) var isCancelled = false
+
+    func cancel() {
+      isCancelled = true
+    }
+  }
+
   var isReady = true
   private(set) var transcriptionCount = 0
   private var completion: ((Result<String, Error>) -> Void)?
+  private(set) var latestOperation: Operation?
 
   func load(completion: @escaping (Result<Void, Error>) -> Void) {
     completion(.success(()))
   }
 
-  func transcribe(_ audio: CapturedAudio, completion: @escaping (Result<String, Error>) -> Void) {
+  func transcribe(
+    _ audio: CapturedAudio,
+    completion: @escaping (Result<String, Error>) -> Void
+  ) -> ASRTranscriptionOperation {
     transcriptionCount += 1
     self.completion = completion
+    let operation = Operation()
+    latestOperation = operation
+    return operation
   }
 
   func complete(_ result: Result<String, Error>) {
@@ -571,6 +595,10 @@ private func testStaleCompletionAndInsertionCancellation() {
   let harness = Harness()
   harness.pressAndRelease()
   harness.coordinator.cancelFromHotkey()
+  check(
+    harness.recognizer.latestOperation?.isCancelled == true,
+    "coordinator cancellation must cancel pending recognition"
+  )
   harness.recognizer.complete(.success("stale"))
   check(
     harness.inserter.insertCalls == 0 && harness.inserter.copyCalls == 0,
@@ -586,6 +614,22 @@ private func testStaleCompletionAndInsertionCancellation() {
   check(operation?.isCancelled == true, "coordinator cancellation must cancel pending insertion")
   insertionHarness.inserter.completeDeferred(.copied("late"))
   check(insertionHarness.coordinator.phase == .idle, "late insertion completion stays inert")
+}
+
+private func testCommonModeTimerRunsDuringMenuTracking() {
+  _ = NSApplication.shared
+  let scheduler = MainRunLoopTimerScheduler()
+  var didFire = false
+  let timer = scheduler.schedule(after: 0.01, repeats: false) {
+    didFire = true
+  }
+  let deadline = Date().addingTimeInterval(0.5)
+  while !didFire, Date() < deadline {
+    let trackingMode = RunLoop.Mode.eventTracking
+    RunLoop.main.run(mode: trackingMode, before: Date().addingTimeInterval(0.02))
+  }
+  timer.cancel()
+  check(didFire, "a common-mode recording timer must run while a menu tracks events")
 }
 
 private func testSecureLatchAndPermissionRevocation() {
@@ -726,6 +770,7 @@ enum CoordinatorHarnessMain {
     testCopyOnlyPrepareBusyAndInterruption()
     testFocusChangeAndNoSpeech()
     testReceiptEndsOnExpiryFocusChangeAndNewPress()
+    testCommonModeTimerRunsDuringMenuTracking()
     print("coordinator harness passed")
   }
 }

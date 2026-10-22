@@ -1,29 +1,5 @@
 import Foundation
 
-/// Files of the pinned `sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25` package (FEAT-001 ED-002, ED-009).
-struct Qwen3ModelFiles {
-  let dir: URL
-
-  var convFrontend: URL { dir.appendingPathComponent("conv_frontend.onnx") }
-  var encoder: URL { dir.appendingPathComponent("encoder.int8.onnx") }
-  var decoder: URL { dir.appendingPathComponent("decoder.int8.onnx") }
-  var tokenizer: URL { dir.appendingPathComponent("tokenizer") }
-
-  /// Names of required files that are missing; empty when the model is usable.
-  var missing: [String] {
-    let fm = FileManager.default
-    var out: [String] = []
-    for u in [convFrontend, encoder, decoder] where !fm.fileExists(atPath: u.path) {
-      out.append(u.lastPathComponent)
-    }
-    for f in ["vocab.json", "merges.txt", "tokenizer_config.json"]
-    where !fm.fileExists(atPath: tokenizer.appendingPathComponent(f).path) {
-      out.append("tokenizer/\(f)")
-    }
-    return out
-  }
-}
-
 enum ASRError: Error, CustomStringConvertible {
   case modelMissing([String])
   case createFailed

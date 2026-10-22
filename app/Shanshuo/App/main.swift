@@ -31,6 +31,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private let soundPlayer = SystemRecordingSoundPlayer()
   private var recognizer: Qwen3ASRService!
   private var coordinator: DictationCoordinator!
+  private var modelManager: ModelManager?
+  private var modelWindowController: ModelManagementWindowController?
+  private var modelObservation: UUID?
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -49,7 +52,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self?.openAccessibilitySettings()
       }
     )
-    recognizer = Qwen3ASRService(files: Qwen3ModelFiles(dir: Paths.modelDir))
+    recognizer = Qwen3ASRService()
     let inserter = SystemTextInserter(permissions: permissions, focusInspector: focusInspector)
     coordinator = DictationCoordinator(
       permissions: permissions,
@@ -70,10 +73,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       self?.coordinator.cancelForOtherKey()
     }
 
+    configureModelManager()
     installSystemObservers()
     refreshSystemState()
     coordinator.prepareAudio()
-    loadModel()
   }
 
   func applicationWillTerminate(_ notification: Notification) {
@@ -85,7 +88,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       DistributedNotificationCenter.default().removeObserver(observer)
     }
     hotkeys.stop()
+    coordinator?.cancelForSystemInterruption()
     recognizer?.unload()
+    if let modelObservation {
+      modelManager?.removeObserver(modelObservation)
+    }
   }
 
   private func makeMenu() -> NSMenu {
@@ -98,6 +105,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       ))
     menu.addItem(sessionItem)
     menu.addItem(modelItem)
+    let manageModelItem = NSMenuItem(
+      title: "管理语音模型…",
+      action: #selector(openModelManagement),
+      keyEquivalent: ""
+    )
+    manageModelItem.target = self
+    menu.addItem(manageModelItem)
     menu.addItem(accessItem)
     menu.addItem(hotkeyItem)
     menu.addItem(
@@ -110,19 +124,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     return menu
   }
 
-  private func loadModel() {
-    recognizer.load { [weak self] result in
-      guard let self else {
-        return
+  private func configureModelManager() {
+    do {
+      let manifest = try Qwen3ModelManifest.loadBundled()
+      let manager = ModelManager(
+        manifest: manifest,
+        ownedDirectory: Paths.ownedModelDirectory,
+        readOnlySeedDirectory: Paths.readOnlyModelSeedDirectory,
+        runtime: recognizer
+      )
+      manager.onWillMutate = { [weak self] in
+        self?.coordinator.cancelForModelChange()
       }
-      switch result {
-      case .success:
-        self.modelItem.title = "语音模型：就绪"
-      case .failure:
-        self.modelItem.title = "语音模型：需要修复"
+      modelManager = manager
+      modelWindowController = ModelManagementWindowController(manager: manager)
+      modelObservation = manager.observe { [weak self] status in
+        self?.updateModelMenu(status)
       }
-      self.refreshSystemState()
+      manager.bootstrap()
+    } catch {
+      modelItem.title = "语音模型：配置错误"
     }
+  }
+
+  private func updateModelMenu(_ status: ModelManagerStatus) {
+    switch status {
+    case .ready:
+      modelItem.title = "语音模型：就绪"
+    case .downloading:
+      modelItem.title = "语音模型：正在下载"
+    case .paused:
+      modelItem.title = "语音模型：下载已暂停"
+    case .loading:
+      modelItem.title = "语音模型：正在加载"
+    case .deleting:
+      modelItem.title = "语音模型：正在删除"
+    case .checking:
+      modelItem.title = "语音模型：正在检查"
+    case .repairRequired, .failed:
+      modelItem.title = "语音模型：需要修复"
+    }
+    refreshSystemState()
   }
 
   private func refreshSystemState() {
@@ -136,9 +178,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   }
 
   private func installSystemObservers() {
-    stateTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+    let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
       self?.refreshSystemState()
     }
+    RunLoop.main.add(timer, forMode: .common)
+    stateTimer = timer
 
     let notificationCenter = NSWorkspace.shared.notificationCenter
     workspaceObservers.append(
@@ -185,5 +229,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     if let url {
       NSWorkspace.shared.open(url)
     }
+  }
+
+  @objc private func openModelManagement() {
+    modelWindowController?.showWindow(nil)
+    NSApp.activate(ignoringOtherApps: true)
   }
 }

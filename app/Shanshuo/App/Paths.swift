@@ -8,9 +8,14 @@ enum Paths {
       .appendingPathComponent("Shanshuo", isDirectory: true)
   }
 
-  /// Where the recogniser looks for model files, in order: `SHANSHUO_MODEL_DIR` (tests),
-  /// `ShanshuoDevModelDir` baked into dev builds by scripts/build.sh, then Application Support (T012 downloads here).
-  static var modelDir: URL {
+  /// The only directory that ModelManager may write or delete.
+  static var ownedModelDirectory: URL {
+    appSupport.appendingPathComponent("Models/\(modelKey)", isDirectory: true)
+  }
+
+  /// Development and test overrides are deliberately read-only seeds. T012 can load a verified
+  /// seed for local development, but delete/repair always target `ownedModelDirectory`.
+  static var readOnlyModelSeedDirectory: URL? {
     if let env = ProcessInfo.processInfo.environment["SHANSHUO_MODEL_DIR"], !env.isEmpty {
       return URL(fileURLWithPath: env, isDirectory: true)
     }
@@ -19,7 +24,13 @@ enum Paths {
     {
       return URL(fileURLWithPath: dev, isDirectory: true)
     }
-    return appSupport.appendingPathComponent("Models/\(modelKey)", isDirectory: true)
+    return nil
+  }
+
+  /// Explicit developer CLI behavior. The menu-bar app uses ModelManager's canonical owned path
+  /// and optional read-only seed instead.
+  static var modelDir: URL {
+    readOnlyModelSeedDirectory ?? ownedModelDirectory
   }
 
   static var buildID: String {

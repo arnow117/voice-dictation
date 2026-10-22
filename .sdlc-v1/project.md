@@ -23,17 +23,17 @@
 
 | 领域 | 使用技术 | 用途与仓库依据 |
 |---|---|---|
-| 运行时 | Swift 6.2 工具链（Xcode 26），macOS 14+，仅 arm64；ShanshuoCore 用 Swift 6 语言模式，应用用 Swift 5 语言模式 | `scripts/build.sh` |
+| 运行时 | Swift 6.3.3 工具链，macOS 14+，仅 arm64；ShanshuoCore 用 Swift 6 语言模式，应用用 Swift 5 语言模式 | `scripts/build.sh`；2026-10-22 `xcrun swift --version` |
 | 框架 | AppKit、Carbon（RegisterEventHotKey）、ApplicationServices（AX、CGEventTap）、AVFoundation；sherpa-onnx v1.13.8 C API 静态库（含 onnxruntime） | `scripts/build.sh`、`Vendor/sherpa-onnx/README.md` |
 | 存储 | 本地文件：模型在 `~/Library/Application Support/Shanshuo/Models/`（开发构建读主 checkout `.work/models/`）；历史与设置为本地文件（T013/T014 实现） | `app/Shanshuo/App/Paths.swift` |
-| 外部系统 | 模型下载源 Hugging Face / hf-mirror / ModelScope（T012）；首个测试版无其他网络调用 | FEAT-001 ED-009 |
+| 外部系统 | 模型下载源 Hugging Face / hf-mirror（T012）；固定 revision 的 Qwen3-ASR 转换包，无 ModelScope 源；首个测试版无其他产品网络调用 | FEAT-001 ED-009 |
 
 ## 入口与配置
 
 | 用途 | 路径或命令 | 说明 |
 |---|---|---|
 | 启动 | `open <main checkout>/.work/build/Shanshuo.app` | 构建产物在主 checkout 的 `.work/build/`，不入库 |
-| 主流程 | `AppDelegate`（`app/Shanshuo/App/main.swift`）→ `Qwen3Recognizer`（`app/Shanshuo/ASR/`） | 启动后在 userInitiated 串行队列后台加载模型（ED-002、ED-014） |
+| 主流程 | `AppDelegate` → `DictationCoordinator` → 平台协议适配器、`Qwen3ASRService` → `Qwen3ChunkDecoder` / `Qwen3Recognizer` | Coordinator 为主线程会话所有者；ASR 在唯一 userInitiated 串行队列加载、使用与卸载（ED-002、ED-014，源码 `500ec4c`） |
 | 配置 | `Info.plist` 由 `scripts/build.sh` 生成；`ShanshuoDevModelDir` 仅开发构建写入；环境变量 `SHANSHUO_MODEL_DIR` 覆盖模型目录（测试用） | 不含 secret |
 | 身份、权限或外部凭据 | 代码签名身份"Shanshuo Test Signing"，专用钥匙串 `<main checkout>/.work/signing/`（不入库）；运行时需要麦克风与辅助功能权限 | 钥匙串密码文件只在本机 `.work/signing/`，不入库 |
 
@@ -59,7 +59,7 @@ commands:
 | 模型与测试身份 | Qwen3-ASR-0.6B int8（`sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25`，SHA-256 见 `spikes/model-download/models.json`）；无云端凭据。 |
 | 运行产物 | `.work/build/`、`.work/spm/`（gitignore）；评测结果 `bench/asr/results/`、报告 `bench/asr/reports/`（入库）。 |
 | CI | none |
-| 准备缺口 | Manus 代理启动的进程只用能效核，计时类指标需在用户会话中启动的应用里测（ED-014）；`open --args` 未把参数传给应用（2026-10-21 22:45 实测），命令行计时只能在用户终端运行。 |
+| 准备缺口 | 2026-10-21 Manus 环境观察到能效核限制及 `open --args` 参数问题；这些是历史环境证据，不能推定当前 Codex 进程也受相同限制。T015 需实际记录最终应用的调度与端到端计时。当前原生界面工具首次连接菜单栏应用发生长时间超时，尚无正式版真实麦克风/权限 PASS；8 个本机应用与 4 个缺失应用的范围见 REQ-001 DEC-023。 |
 
 ## 变更面映射
 
@@ -91,7 +91,7 @@ surfaces:
 | 测试、格式化与质量检查 | 新规则先写 Swift Testing 失败测试；提交前跑 `bash scripts/test.sh` | `scripts/test.sh` |
 | 错误、日志与可观测性 | 应用日志不记录识别文本、输入框内容和音频（REQ-001 隐私规则）；命令行模式输出文本只用于开发测试 | `app/Shanshuo/App/CLI.swift` |
 | 数据、兼容性与安全 | 音频只在内存，不落盘（REQ-001 DEC-007）；密码框中不录音（DEC-013）；Hardened Runtime + audio-input entitlement | `scripts/build.sh` |
-| 禁止操作与本地指令 | 不向 main 直接推送，除非用户当次确认；功能分支提交后推送；提交带 `Co-authored-by: Manus <dev-agent@manus.ai>`；Python 用 uv | 工作区 `user.md` |
+| 禁止操作与本地指令 | 功能分支提交后推送；主分支和公开发布通常需当次明确授权，本 Feature 已由 REQ-001 DEC-022 授权。按实际贡献者记录提交，不沿用先前工具身份；Python 用 uv | 上级 AGENTS.md、`user.md`、REQ-001 DEC-022 |
 
 ## 已知风险与未确认事实
 

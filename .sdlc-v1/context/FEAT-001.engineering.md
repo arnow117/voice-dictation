@@ -93,10 +93,19 @@ flowchart LR
 ### 2026-10-22 交付约束细化
 
 - 异步插入与会话共用取消边界。Coordinator 取消时，插入器必须撤销尚未执行的粘贴、超时复制及相关回调；每次不可逆写入前重新检查当前操作和安全状态。旧会话不能凭迟到回调写入新会话。临时剪贴板只在仍由本应用持有时恢复。
+- ASR 返回可取消的 operation。取消立即使排队任务失效并释放尚未处理的音频；正在执行的同步原生块允许完成，但不得继续解码其余块。任务开始和每块开始前均检查取消状态，迟到结果不能回写。模型卸载仍在同一串行队列等待当前原生调用结束，不并发销毁识别器。取消长录音后，新听写只等待至多当前块结束。
+- 会话期限、权限、安全输入和回执到期所需的主线程 Timer 注册到 RunLoop 的 common modes，菜单保持展开时仍需执行。录音上限不依赖用户关闭菜单。
+- AX 的屏幕坐标转换使用主显示器参考坐标（`NSScreen.screens.first`），不能以所有显示器的最高边或当前活跃屏幕作为转换原点。几何回归覆盖主屏上方、下方与负坐标屏幕；合成几何证据不代替多屏真机验证。
 - 模型管理为单一写入者：下载、暂停、换源、校验、删除、修复都带操作代次；过期回调不能重新启用旧模型。ASR 的创建、使用和卸载保持在同一串行队列；删除前先停止新会话，取消当前会话，等待卸载完成，再修改该模型目录。完成校验后才触发加载。
 - 模型下载流式写入 `.part`，不能将整个大文件放进内存。Range 的起点和完整长度必须与清单一致；200 响应需截断重下，206 校验 Content-Range，416 只能对实际完整且校验通过的文件作完成处理，否则从头恢复。完整文件检查大小与 SHA-256，再原子重命名；不存在“仅文件名齐全就就绪”的状态。生产路径只使用内置的固定清单与 HTTPS 源。
 - 模型加载/删除/修复期间禁止开始新听写。下载取消保留可恢复的部分文件；校验失败自动重下一次，仍失败则显示恢复入口。系统错误转换为明确、无私人内容的错误状态。
 - 引导、设置和菜单栏共享权限、模型、快捷键、暂停和练习状态，系统权限每次从 OS 读取；引导进度可续接，但权限与模型 readiness 不能由已保存的“完成”标记替代。仅复制模式的练习须从真实识别结果复制/粘贴完成，不能预填假文本通过。
+- 应用级主线程状态对象提供共享投影，窗口只发送命令；Coordinator 继续独占会话状态，ModelManager 独占模型文件变更，HistoryStore 串行拥有数据库。引导只保存进度、已访问步骤与成功/跳过标记，不保存练习文本或音频。有效步骤不包含输入监控和整理配置。
+- 麦克风测试复用受控采集边界，和听写互斥；显示测试状态后才能采集，关页/关窗/跳过/权限变化立即取消。声音检测来自真实电平；快捷键测试来自真实按住和松开事件。练习成功关联 session ID 与真实识别结果：直接模式确认控件实际收到该文本；复制模式须用户把本次实际结果粘贴入练习框。普通手输、非空初始值、快捷键注册成功或未验证插入回调都不能单独完成练习。
+- 偏好快捷键与当前有效快捷键分别建模；无辅助功能时强制有效值为 ⌃⇧ Space，保留用户偏好。自定义支持单修饰键及修饰键加普通键，拒绝无修饰普通键和系统保留组合，失败必须显示实际未注册状态。Fn 系统占用仅检测并给出系统设置入口，不静默修改系统键盘偏好。
+- 输入设备保存稳定 UID 或“跟随系统默认”，开始时解析并固定本次设备；设置变化及默认设备变化在下一次生效。仅设备列表变化不能取消仍可用的活动设备；活动设备消失或实际引擎重配置无法续采时取消并丢弃，绝不续接替换设备。只配置本应用输入单元，不改变系统默认设备。复用 AVAudioEngine / CoreAudio 的设备设置，参见 [Apple AUAudioUnit 设备接口](https://developer.apple.com/documentation/audiotoolbox/auaudiounit/deviceid)。
+- Coordinator 在最终仍有效的结果上发布唯一的 SessionOutcome，包含 session ID、允许保留的文本、真实 inserted/copied/unverified 结果与目标；历史与练习消费此事件，不能从胶囊文案或早到的识别回调推断成功。取消、安全输入、睡眠等丢弃路径不得产生含文本事件。历史按 session ID 去重，串行删除/清空后旧回调不能复活记录；查询排除已过期项，数据库及其 WAL/SHM/journal 和目录均限制当前用户访问。
+- 暂停支持一小时与手动恢复，立即取消活动会话；持久化暂停模式/截止时间，唤醒或重启按绝对截止时间重算。历史默认开启且保留七天；关闭只停止后续写入，已有记录由明确删除操作处理。诊断接口只接受事件枚举、耗时和错误码，不能接收任意文本或底层错误描述。
 - 公共源码构建不依赖发布私钥或本机绝对路径。开发者可选择自己的签名身份或 ad-hoc 构建；发布资产使用已有测试签名身份，并附全部许可。release 配置不携带开发模型路径、测试注入或私人数据。源码公开与发布授权见 REQ-001 DEC-022，未改变产品质量阈值。
 - 实现期间的单元、集成与模拟系统证据不替代 T015 的真机、权限、性能和兼容性验证；所有环境缺口与未测项目显式记录，最终验证不得将其算作通过。
 
@@ -104,7 +113,7 @@ flowchart LR
 
 - `DictationSession`（内存）：`id`、`phase`（idle / listening / recognizing / inserting / cancelled / failed）、`startedAt`、`targetAtPress`、`targetAtRelease`、`audioBuffer`（16 kHz 单声道 Float32，3 分钟上限约 11 MB，会话结束即释放）、`failureReason`。
 - `TargetSnapshot`：`bundleID`、`pid`、`focusedElementID?`、`isSecure`。
-- `HistoryRecord`（SQLite）：`id`、`createdAt`、`targetBundleID`、`targetAppName`、`recognizedText`、`finalText`、`insertResult`（inserted / copied）。不存在"密码框"类型的记录（DEC-013）。
+- `HistoryRecord`（SQLite）：`id`、`sessionID`（唯一）、`createdAt`、`targetBundleID`、`targetAppName`、`recognizedText`、`finalText`、`insertResult`（inserted / copied / unverified）。只接收最终允许保留的 SessionOutcome；不存在"密码框"类型的记录（DEC-013）。
 - `InstalledModel`：`modelID`、`version`、`files[{name, sha256, bytes}]`、`path`、`isActive`。
 - `PermissionState`：麦克风、辅助功能两项；每次需要时向系统查询，不缓存为真值（REQ-001 关键实体）。
 - `InsertionReceipt`（内存）：`targetPID`、`element`（AXUIElement 引用）、`insertedText`、`method`（ax / paste / unicode）、`locator`（定位插入段所需的上下文）、`insertedAt`。结束事件发出后立即释放（ED-013）。
@@ -152,10 +161,10 @@ sequenceDiagram
 #### 横切质量设计
 
 - **延迟预算（NFR-002，15 秒语音，P50 ≤ 1.0 秒）**：停止采集 ≤ 20 ms；识别是主要耗时（T001 实测，目标 ≤ 800 ms）；焦点快照与插入 ≤ 100 ms；剪贴板恢复不计入"文本出现"时间。识别在独立的串行队列上执行，模型常驻。
-- **空闲开销（NFR-004）**：空闲时不运行 AVAudioEngine；event tap 回调只做位判断；不轮询，权限变化在 Onboarding 窗口打开时才每秒检测一次。
+- **空闲开销（NFR-004）**：空闲时不运行 AVAudioEngine；event tap 回调只做位判断。必要的权限刷新使用低频 common-mode Timer，活动会话额外检查安全状态；以 T015 实测 CPU 低于 1% 为准，不把“没有任何 Timer”作为实现前提。
 - **隐私**：音频只在内存缓冲中存在，会话结束（包括取消和失败）立即清零释放；不写临时文件；日志不含文本；模型下载请求不带用户标识。粘贴时读出的原剪贴板内容只在内存中保留到恢复完成；插入回执同样只在内存中。
 - **可靠性**：event tap 被系统禁用时（`tapDisabledByTimeout` / `tapDisabledByUserInput`）自动重新启用，并在菜单栏提示；识别崩溃风险由 T001 的长时间压测评估，必要时把引擎移到 XPC 子进程（不在首版计划内）。
-- **无障碍（NFR-007）**：SwiftUI 控件加 `accessibilityLabel`；胶囊状态同时用文字表达；Onboarding 与设置可全程键盘操作，用 XCUITest 检查。
+- **无障碍（NFR-007）**：原生控件有可读标签；胶囊状态同时用文字表达；Onboarding 与设置可全程键盘操作，用真实键盘导航和 VoiceOver 检查（ED-017）。
 
 #### 风险与取舍
 
@@ -174,8 +183,8 @@ sequenceDiagram
 
 | 验收条件 | 设计 / 契约 | 计划 Task | 计划验证 |
 |---|---|---|---|
-| 用户故事 1 场景 1～12，FR-001、FR-003、FR-005、FR-009、FR-015 | ED-003～ED-007，状态机 | T005、T006、T007、T009、T010 | `swift test`（规则）；XCUITest 驱动 TextEdit、备忘录；DEC-012 应用矩阵手测 |
-| 用户故事 2 场景 1～10，FR-006～FR-008 | ED-003（只需辅助功能；仅复制模式用组合键）、PermissionService | T006、T011 | XCUITest（Onboarding 窗口）+ 新建 macOS 用户账户全新安装手测 |
+| 用户故事 1 场景 1～12，FR-001、FR-003、FR-005、FR-009、FR-015 | ED-003～ED-007，状态机 | T005、T006、T007、T009、T010 | `swift test`（规则）、生产组件 harness、原生 UI 与 DEC-023 应用矩阵手测 |
+| 用户故事 2 场景 1～10，FR-006～FR-008 | ED-003（只需辅助功能；仅复制模式用组合键）、PermissionService | T006、T011 | 原生 UI 键盘/辅助功能检查与全新用户路径手测；无 Xcode 工程，不使用 XCUITest（ED-017） |
 | 用户故事 3 场景 1～9，FR-004、FR-010～FR-012、FR-014 | ED-007、ED-010 | T007、T013 | 自动化计数提示出现率（SC-004）；日志扫描无文本；检查本机无音频文件 |
 | 用户故事 4 场景 1～3，FR-013 | ED-009 | T003、T012 | 断网、校验失败、删除模型的集成测试 |
 | FR-002、NFR-002、NFR-003 | ED-002 | T001、T008、T015 | eval-bench 报告（开发机 M5 / 16 GB，写明缺少 M1 数据，DEC-019） |
@@ -198,8 +207,8 @@ sequenceDiagram
 | 语言 / UI | Swift 6、SwiftUI + AppKit | Xcode 26.6（Swift 6.3.3），部署目标 macOS 14.0，arm64 |
 | 识别 | sherpa-onnx C API + 官方 Swift 封装 | v1.13.8（固定版本，升级另开 Task） |
 | 模型 | Qwen3-ASR-0.6B int8（唯一，REQ-001 DEC-021） | `sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25` 等，SHA-256 固定在清单 |
-| 存储 | GRDB.swift（SQLite）、UserDefaults | GRDB 7.x |
-| 测试 | Swift Testing / XCTest、XCUITest | 随 Xcode |
+| 存储 | 系统 SQLite3、UserDefaults | 随 macOS；不增加 GRDB（ED-010） |
+| 测试 | Swift Testing、生产组件集成 harness、原生 UI 手测 | 无 Xcode 工程 / XCUITest（ED-017） |
 | 评测 | Python 3 脚本调用 sherpa-onnx Python 包（与 App 同版本） | `sherpa-onnx==1.13.8` |
 
 #### 实施阶段
@@ -225,24 +234,24 @@ sequenceDiagram
 | T008 | 识别引擎 | `app/Shanshuo/ASR/`、`Vendor/sherpa-onnx/` | T004、T001 | Qwen3-ASR 实现（REQ-001 DEC-021）；启动后后台加载；识别在 userInitiated 串行队列（ED-014），测试中记录识别期间的核心负载；测试用 WAV 夹具 | 集成测试（夹具音频 → 期望文本） |
 | T009 | 文本插入与仅复制模式 | `app/Shanshuo/Platform/Insert*` | T006、T002 | ED-005 三种插入方式与按应用选择；剪贴板 Transient 标记与恢复；插入回执与结束事件（ED-013）；仅复制模式提示与"开启直接插入" | XCUITest（TextEdit）+ DEC-012 矩阵手测 |
 | T010 | 核心闭环集成 | `app/Shanshuo/Coordinator/` | T005～T009 | 用户故事 1 场景 1～12 全部可演示；测试构建可用 WAV 文件替代麦克风输入 | XCUITest 端到端 + 真机麦克风冒烟 |
-| T011 | Onboarding | `app/Shanshuo/UI/Onboarding/` | T010、T012 | 9 步、可返回、中途退出续接、练习框、权限修复卡片（DEC-015、DEC-016） | XCUITest + 新用户账户全新安装手测（SC-001） |
+| T011 | Onboarding | `app/Shanshuo/UI/Onboarding/` | T010、T012 | 有效步骤覆盖欢迎、麦克风、辅助功能、模型、麦克风测试、快捷键、练习、完成；可返回和续接。按 DEC-017/021 去掉输入监控与整理配置，不为凑历史步数恢复范围外功能 | 协议集成测试 + 原生 UI / 全新用户路径手测（SC-001、ED-017） |
 | T012 | 模型管理 | `app/Shanshuo/Models/`、设置 › 语音模型 | T003、T008 | 下载、暂停、续传、切换源、校验、切换模型、删除、修复入口 | 集成测试（本地 HTTP 服务模拟断网与坏文件） |
-| T013 | 隐私、暂停与历史 | `app/Shanshuo/{History,Privacy}/`、设置 › 历史 / 隐私 | T010 | 暂停 1 小时 / 手动恢复；7 天历史、删除、清空、关闭；隐私页；日志无文本 | 单测 + 日志扫描脚本 + XCUITest |
-| T014 | 设置窗口与菜单栏 | `app/Shanshuo/UI/Settings/`、`MenuBar*` | T011～T013 | 通用（快捷键、输入设备、提示音）各页与原型一致；菜单栏项与状态 | XCUITest |
-| T015 | 质量指标与兼容性验收 | `bench/e2e/`、`docs/validation/` | T010～T014 | NFR-001、NFR-002、NFR-004～NFR-007 实测；DEC-012 应用插入成功率 ≥ 98% | 报告入库（供 sdlc-validate） |
+| T013 | 隐私、暂停与历史 | `app/Shanshuo/{History,Privacy}/`、设置 › 历史 / 隐私 | T010 | 暂停 1 小时 / 手动恢复；7 天历史、删除、清空、关闭；隐私页；日志无文本 | 单测 + 日志扫描脚本 + 原生 UI 检查 |
+| T014 | 设置窗口与菜单栏 | `app/Shanshuo/UI/Settings/`、`MenuBar*` | T011～T013 | 通用（快捷键、输入设备、提示音）各页与原型一致；菜单栏项与状态 | 协议测试 + 原生 UI 键盘/VoiceOver 检查 |
+| T015 | 质量指标与兼容性验收 | `bench/e2e/`、`docs/validation/` | T010～T014 | NFR-001～NFR-007 实测；DEC-023 本机八个应用插入成功率 ≥ 98%，四个缺失应用明确未测 | 报告入库（供 sdlc-validate） |
 | T016 | 测试版打包与安装说明 | `scripts/release/`、entitlements、`docs/install.md` | T015 | 用 ED-012 身份签名的 .app 与 DMG；安装说明写明首次打开的系统设置步骤和"未在 M1 上测试"（DEC-019） | `codesign --verify --deep --strict`；在另一个 macOS 用户账户中按说明全新安装 |
 
 执行顺序：T001、T002、T003 可并行，是所有实现 Task 的前置；T004 → T005 → T006/T008（可并行）→ T007、T009 → T010 → T012 → T011 → T013 → T014 → T015 → T016。
 
 ### 使用入口与实际使用验证
 
-用户可见入口：菜单栏图标与菜单、全局快捷键、录音胶囊、Onboarding 窗口、设置窗口。参数来源：快捷键、输入设备、提示音、历史开关来自设置；模型来自 ModelManager。实际使用验证：在开发机（M5 / 16 GB，macOS 26.4.1）上用真实麦克风完成 SCN-001～SCN-012、SCN-019，并在 DEC-012 的 13 个应用中各听写 10 次；没有 M1 可测，验证报告写明（DEC-019）。
+用户可见入口：菜单栏图标与菜单、全局快捷键、录音胶囊、Onboarding 窗口、设置窗口。参数来源：快捷键、输入设备、提示音、历史开关来自设置；模型来自 ModelManager。实际使用验证：在开发机（M5 / 16 GB，macOS 26.4.1）上用真实麦克风完成 SCN-001～SCN-012、SCN-019，并在 DEC-023 的本机八个应用中各听写 10 次（备忘录、TextEdit、Safari、Chrome、微信、飞书、VS Code、Terminal）；Slack、Cursor、Notion、iTerm2 未安装并明确未测试。没有 M1 可测，验证报告写明（DEC-019）。
 
 ### 测试策略
 
 - 规则层：`swift test`，用例来自原型测试，保证生产规则与已确认原型一致。
 - 系统适配层：协议替身做单测；真实系统行为由 T002 结论和手测清单覆盖。
-- 端到端：XCUITest 驱动闪说自己的窗口，并通过 Bundle ID 驱动 TextEdit 等目标应用；测试构建允许用 WAV 文件替代麦克风输入（只在 DEBUG 构建中编译）。
+- 端到端：正式原生窗口和目标应用做实际麦克风、快捷键与插入检查；生产组件 harness 验证可控异步与错误分支。显式开发 CLI 用 WAV 做识别评测，不能把它记作真实麦克风或跨应用 PASS，也不在发布版增加环境变量触发的音频注入。
 - 评测：`bench/asr` 和 `bench/e2e` 的报告绑定 commit，作为 sdlc-validate 的证据。
 
 ### 回滚方式
@@ -301,6 +310,8 @@ sequenceDiagram
 
 - **主 Agent 验收**：已复核核心差异与两轮修正证据：自动停止的焦点、迟到启动、取消后的副作用、剪贴板所有权、音频设备事件均有对应生产路径或协议边界回归。接受此段 build；真机麦克风、权限、兼容性与质量指标继续作为 T015 和最终 validate 的必要条件，不因 Task done 而豁免。原生界面工具仅成功建立 TextEdit 合成文档，连接菜单栏应用两次超时，未产生应用通过证据；本轮工具启动的旧测试实例已停止。
 
+- **独立中间审查（`500ec4c`）**：静态发现三项 P2：默认 mode 的 Timer 在菜单跟踪时暂停必要检查；取消长录音只忽略结果而仍解码全部块，阻塞唯一 ASR 队列；AX 坐标以全部屏幕最高边转换，在主屏上方有外屏时选错屏幕。主 Agent 接受三项发现，补充当前有效方案并交同一 worker 修正及回归；此审查未运行测试，不是最终生命周期 review。此前两轮修正已有验收进展，未触发不收敛停止，诊断额度未使用。
+
 ## 验证记录（实际）
 
 尚未开始。
@@ -312,3 +323,13 @@ sequenceDiagram
 ## 发布与观察记录（实际）
 
 尚未开始。
+
+### T012 模型管理与本段核心修正（worker 实现，待主 Agent 验收，2026-10-22）
+
+- **模型管理**：内置 `Qwen3ModelManifest.json` 只含 REQ-001 确定的 Qwen3-ASR 0.6B INT8、固定 revision、六个必需文件、总大小和 SHA-256。`ModelManager` 是唯一的文件与网络写入者，使用 operation generation 防止下载、校验、加载、删除的迟到回调恢复就绪状态。它只写 `Application Support/Shanshuo/Models/qwen3-asr-0.6b-int8`；`SHANSHUO_MODEL_DIR` 和开发 bundle 路径仅作为只读 seed，删除和修复不会触及它们。
+- **传输与运行时**：`URLSessionModelFileDownloader` 将响应分块直接写入 `.part`；严格验证 Range 的 start、total 和 Content-Length，服务器忽略 Range 时截断后从零开始，416 仅交由完整 partial 的 SHA/大小验证，响应超长会中止。每个文件完成后流式 SHA-256 校验并原子移动；第一次校验失败会重下，第二次失败为可见错误。ModelManager 在运行时完成串行 `unload` 后才删除或重写映射文件，只有所有六文件验证并由 Qwen3 runtime 加载成功才发布 ready。
+- **界面与集成**：菜单栏“管理语音模型…”会打开共享 `ModelManagementWindowController`，提供状态、大小、位置、下载源、下载/暂停/继续、重试、修复和删除，并为后续 Onboarding/设置复用同一 manager。模型维护先取消 Coordinator 当前会话，运行时未 ready 时不能开始听写。界面不记录音频、转写、完整下载 URL 或凭据。
+- **本段核心修正**：主线程计时器显式加入 `.common`，保证菜单 tracking 期间仍检查 180 秒、安全输入和权限；Qwen3 分块转写返回可取消 operation，Coordinator 在取消、系统中断、模型维护和结束路径取消它，排队的 operation 只保留可擦除 samples 与 sample-rate 标量，当前 C API 块结束后不会解后续块；runtime generation 也阻止 unload 后迟到结果。`RecordingPill` 用 `NSScreen.screens.first` 的 frame（主屏）转换 AX 坐标，不再用全部显示器的最高边。
+- **实际检查**：`bash tests/integration/run_model_downloader_harness.sh`、`run_model_downloader_http_harness.sh`、`run_model_manager_harness.sh`、`run_asr_cancellation_harness.sh`、`run_coordinator_harness.sh` 和 `run_screen_geometry_harness.sh` 均 exit 0。模型 harness 覆盖新下载、只读 seed、暂停/跨源 Range 续传、primary→mirror、完整/不完整 416、两次 checksum 失败、删除与迟到 load callback；downloader harness 直接驱动生产 URLSession delegate，覆盖 206、忽略 Range 的 200、无效 Range、超长 body 与 416；其 local HTTP fixture 绑定 loopback，仅作为显式测试依赖，复测同一协议分支。对既有只读 `.work/models/qwen3-asr-0.6b-int8` 实际逐文件流式 SHA-256 检查，内置清单六文件全部匹配。ASR harness 覆盖运行中取消只允许当前块结束、跳过其余块和排队已取消任务、下一短任务与 completion-aware unload。坐标 harness 覆盖主屏上方/下方/负坐标外屏；未连接真实第二显示器，仍需 T015 手测。`swift test` 的 13 个核心测试也通过；`xcrun swift-format lint` 与 `git diff --check` 通过。
+- **环境限制**：本工作树的 `bash scripts/build.sh` 在完成编译和链接后，`security unlock-keychain` 返回 exit 206（“One or more parameters passed to a function were not valid.”），因此本轮无法将签名后的 build 记为通过，也没有启动 GUI。此前长音频 ASR 夹具的模型/推理输入未改变；本段新增 ASR 生命周期覆盖不复用为实际长音频运行结果。真实模型下载、麦克风、权限、原生模型窗口、全屏/多显示器与 DEC-023 应用矩阵仍由主 Agent/T015 手测，未在此记录为通过。
+- **主 Agent 验收补充**：使用既有签名资源在沙箱外执行 `bash scripts/build.sh`，exit 0，构建 `20261022-123500`；未修改证书、钥匙串或密码。随后同一未提交快照执行 `bash scripts/test.sh`，exit 0，签名构建 `20261022-123523`：13 个 Swift 测试、Coordinator（含真实 eventTracking RunLoop Timer）、TextInserter、几何、ASR 取消、ModelManager、生产 URLSession delegate 与 loopback HTTP 下载 harness 全部通过；8 条实际 ASR 夹具中文/英文/混说/实体错误率为 0.0% / 7.5% / 5.7% / 1.4%，180 秒九块保留尾段，零信号无文本。原解锁错误由沙箱访问条件造成，当前签名 build 已通过。主 Agent 复核取消 operation、无整段 audio 的排队 closure 捕获、流式校验、嵌套 tokenizer 目录和主屏坐标转换，接受 T012 及三项核心修正的 build；最终权限、麦克风、质量与兼容性条件仍待 T015。

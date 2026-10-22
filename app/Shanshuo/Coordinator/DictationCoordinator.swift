@@ -33,14 +33,16 @@ private final class MainRunLoopTimer: CoordinatorTimer {
   }
 }
 
-private final class MainRunLoopTimerScheduler: CoordinatorTimerScheduling {
+final class MainRunLoopTimerScheduler: CoordinatorTimerScheduling {
   func schedule(after interval: TimeInterval, repeats: Bool, _ action: @escaping () -> Void)
     -> CoordinatorTimer
   {
     let task = MainRunLoopTimer()
-    task.timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: repeats) { _ in
+    let timer = Timer(timeInterval: interval, repeats: repeats) { _ in
       action()
     }
+    RunLoop.main.add(timer, forMode: .common)
+    task.timer = timer
     return task
   }
 }
@@ -77,6 +79,7 @@ final class DictationCoordinator {
   private var recordingTimer: CoordinatorTimer?
   private var receiptExpiryTimer: CoordinatorTimer?
   private var pendingInsertion: TextInsertionOperation?
+  private var pendingRecognition: ASRTranscriptionOperation?
   private var audioOperation: AudioCaptureOperation?
   private var retainedReceipt: RetainedReceipt?
   private var generation = SessionGeneration()
@@ -180,6 +183,11 @@ final class DictationCoordinator {
   func cancelForSystemInterruption() {
     requireMainThread()
     cancel(message: "系统已中断，本次内容已丢弃")
+  }
+
+  func cancelForModelChange() {
+    requireMainThread()
+    cancel(message: "语音模型正在更新，本次内容已丢弃")
   }
 
   private func handleAudioInterruption(_ operation: AudioCaptureOperation) {
@@ -331,20 +339,35 @@ final class DictationCoordinator {
     phase = .recognizing
     indicator.showProcessing()
     let completionGeneration = session.generation
-    recognizer.transcribe(audio) { [weak self] result in
-      self?.handleRecognition(result, generation: completionGeneration)
-    }
+    startRecognition(audio, generation: completionGeneration)
     // The recognizer owns its queued copy now; release this main-thread reference immediately.
     audio.erase()
   }
 
+  private func startRecognition(
+    _ audio: CapturedAudio, generation completionGeneration: SessionGeneration
+  ) {
+    let operation = RecognitionOperationSlot()
+    pendingRecognition = operation
+    let underlyingOperation = recognizer.transcribe(audio) { [weak self, weak operation] result in
+      guard let operation else {
+        return
+      }
+      self?.handleRecognition(result, generation: completionGeneration, operation: operation)
+    }
+    operation.adopt(underlyingOperation)
+  }
+
   private func handleRecognition(
-    _ result: Result<String, Error>, generation completionGeneration: SessionGeneration
+    _ result: Result<String, Error>,
+    generation completionGeneration: SessionGeneration,
+    operation: ASRTranscriptionOperation
   ) {
     requireMainThread()
-    guard isCurrentRecognizingSession(completionGeneration) else {
+    guard pendingRecognition === operation, isCurrentRecognizingSession(completionGeneration) else {
       return
     }
+    pendingRecognition = nil
     cancelIfSecureInputActive()
     guard isCurrentRecognizingSession(completionGeneration) else {
       return
@@ -536,6 +559,11 @@ final class DictationCoordinator {
     pendingInsertion = nil
   }
 
+  private func cancelPendingRecognition() {
+    pendingRecognition?.cancel()
+    pendingRecognition = nil
+  }
+
   private func cancel(message: String) {
     guard phase != .idle else {
       return
@@ -544,6 +572,7 @@ final class DictationCoordinator {
     phase = .cancelled
     recordingTimer?.cancel()
     recordingTimer = nil
+    cancelPendingRecognition()
     cancelPendingInsertion()
     cancelAudioOperation()
     activeSession = nil
@@ -556,6 +585,7 @@ final class DictationCoordinator {
     generation.invalidate()
     recordingTimer?.cancel()
     recordingTimer = nil
+    cancelPendingRecognition()
     cancelPendingInsertion()
     cancelAudioOperation()
     activeSession = nil
@@ -568,6 +598,7 @@ final class DictationCoordinator {
     generation.invalidate()
     recordingTimer?.cancel()
     recordingTimer = nil
+    cancelPendingRecognition()
     cancelPendingInsertion()
     cancelAudioOperation()
     activeSession = nil
@@ -596,6 +627,23 @@ private final class InsertionOperationSlot: TextInsertionOperation {
   private var isCancelled = false
 
   func adopt(_ operation: TextInsertionOperation) {
+    self.operation = operation
+    if isCancelled {
+      operation.cancel()
+    }
+  }
+
+  func cancel() {
+    isCancelled = true
+    operation?.cancel()
+  }
+}
+
+private final class RecognitionOperationSlot: ASRTranscriptionOperation {
+  private var operation: ASRTranscriptionOperation?
+  private var isCancelled = false
+
+  func adopt(_ operation: ASRTranscriptionOperation) {
     self.operation = operation
     if isCancelled {
       operation.cancel()
