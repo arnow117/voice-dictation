@@ -366,6 +366,16 @@ sequenceDiagram
 
 DEC-024 的 120 条原始评测未重跑：中文 CER 6.48% 与混说 MER 12.94% 仅按该例外随包披露，原 NFR-003 仍未通过。运行时模型 metadata 本轮不可取得，未声称重新核验。当前业务代码工作树干净；`.sdlc-v1/project.md` 为并发中的上下文更新，未由 validate 改写。
 
+### 最终修正版 validate：DEC-025 beta（`930c7fee2836e46d6c1bec9549d601e520d5ee46`，2026-10-22）
+
+旧 `1.0.1` 的最终 validate 不能覆盖权限时序和麦克风测试停止互斥修正；本轮只验证重签的 `1.0.2` 候选。沙箱中的完整 `SHANSHUO_VENDOR_CACHE=/Users/arnow117/hansen_agent_team/workspace/20261021-voice-dictation/.work/vendor SKIP_ASR=1 bash scripts/test.sh` 仅因本地 HTTP downloader fixture 不能绑定 loopback 而 exit 1；同一命令在授权环境 exit 0。它通过 13 个 Swift 核心测试、dev build、Coordinator、生产 `SystemTextInserter`、热键、queued audio、Onboarding、model/downloader（含本地 HTTP）和其余列出的 native harness。`xcrun swift-format lint`（四个修正 Swift 源/harness）与 `git diff --check` 均 exit 0。
+
+Coordinator harness 以生产 `DictationCoordinator.swift` 编译，覆盖无周期 refresh 的麦克风/Accessibility 撤权：识别交付前不会启动文字副作用，文字效果已启动后的迟到完成不会发布 outcome，direct fallback copy 保留其 press-time Accessibility 要求，而合法 copy-only 仍可无 Accessibility 复制。它还以延迟实际 audio adapter stop 覆盖自然结束的麦克风测试：stop completion 前按住热键不启动第二次 capture，完成后才允许新的 capture。`SystemTextInserter` harness 直接编译生产实现，覆盖撤销麦克风或 Accessibility 后 delayed Command-V、final clipboard write 均不发生，原 clipboard 只在仍归本次所有时恢复并释放 provider；它也覆盖 copy-only 与 direct fallback 的不同 Accessibility policy。
+
+最终资产位于 `.work/dist/v0.1.0-beta.1-final/`。`bash scripts/release/verify_archives.sh` 在授权环境 exit 0：SHA-256 清单、ZIP 解包、只读 DMG 挂载/卸载、严格深度签名、Hardened Runtime、audio-input entitlement、arm64、仅系统 dylib、无开发模型键/checkout path/模型权重或音频 fixture、17 个 license 和包内 Markdown 链接均通过。ZIP SHA-256 为 `da8e9588afab1fb849148d898681da12aac538ed1125fcfb7fc65094d42c35fd`（9,652,475 bytes），DMG 为 `0cee66ef738fd0b997cf43cced43e55159479b634a45153b2aec6ca8e663db77`（10,713,844 bytes）；ZIP 解包和只读 DMG 均为 `0.1.0/1.0.2`，可执行文件 SHA-256 均为 `f35b33699c1e4ebe0c9d6d1ff5a7bde5c4e1a230c980b02cfc84009adb974f7e`。
+
+主 Agent 的独立安装 smoke 已在同一最终二进制上得到 production process ready（单次 4.209402292 秒）及公开 `zh-001.wav` CLI decode exit 0；这不是新的人声听写复测。旧 `1.0.1` 的 Notes 人工输入仅可作为未改常规路径的历史参考，不能代替 `1.0.2` 的真人复测；本次新权限和停止行为由上述生产 harness 覆盖。原始冷启动、八应用矩阵、Codex 自动插入和 NFR-003 限制继续按 DEC-025 披露，未作为通过声明；本轮未运行 GUI、真实麦克风、权限动作或 120 条 ASR。
+
 ## 评审记录（实际）
 
 ### 最终 review：`2e214409`（2026-10-22）
