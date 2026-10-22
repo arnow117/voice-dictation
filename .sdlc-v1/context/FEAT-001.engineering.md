@@ -394,6 +394,16 @@ T010 重新打开，由同一 core_delivery worker 完成有界修正与生产 h
 
 尚未开始。
 
+### FEAT-001 源码与测试版分发准备（2026-10-22）
+
+发布目标是 `arnow117/voice-dictation` 的公开源码、PR #4 合入 `main` 和 `v0.1.0-beta.1` prerelease；不部署服务。实现版本固定为 validation commit `930c7fee2836e46d6c1bec9549d601e520d5ee46`。当前 `e263c7f62dbaedca1ed62f3de002423f2f8672b0` 相对此 commit 仅有 `.sdlc-v1/context/FEAT-001.engineering.md` 与 `.sdlc-v1/state.json` 的 validation/review 记录，工作树没有未提交业务文件。发布前的 last-good `main` 为 `096670904c46903d40beabe075a73cc2c70797f4`；这是首个二进制公开版，没有可回退的旧公开应用资产。
+
+本地准备已核对 `.work/dist/v0.1.0-beta.1-final/` 的三项冻结资产和 `SHA256SUMS.txt`：ZIP `da8e9588afab1fb849148d898681da12aac538ed1125fcfb7fc65094d42c35fd`（9,652,475 bytes）、DMG `0cee66ef738fd0b997cf43cced43e55159479b634a45153b2aec6ca8e663db77`（10,713,844 bytes）及清单文件均存在。`.work/release-publication/pr-body.md` 和 `release-body.md` 已逐项包含 validation commit、最终两项 SHA、未公证/arm64 范围、Codex 自动插入失败、DEC-024 的准确率例外，以及“最终 `1.0.2` 未声称新一轮真人听写”的适用边界。主 Agent 的本机最终 app ready/公开 CLI 结果可以引用；旧 `1.0.1` Notes 人工输入不能改写为新版真人结果。
+
+主 Agent 执行前先只读确认公开可见性、PR #4 的 base/head/review 和 head SHA；然后以 `--match-head-commit e263c7f62dbaedca1ed62f3de002423f2f8672b0` 更新 PR 正文并合入。合入后读取 `main` 的实际 SHA，再以该 SHA 创建 `v0.1.0-beta.1` prerelease、上传这三项资产及 `release-body.md`。随后读取 release metadata（tag、target、prerelease、draft、三项 assets）并用不携带 GitHub 凭据的公开下载 URL 在新目录下载 ZIP、DMG 和清单，运行 `shasum -a 256 -c SHA256SUMS.txt`。下载校验成功前不请求 `record-release`。
+
+若 PR 前置检查、合入、release 创建、metadata 或公开下载校验任一步失败，停止后续发布与公告，保留 CLI 输出、下载文件和 SHA 结果；release 创建已留下 draft 时不重复 create。公开内容无法收回，因而不把删除、改 tag 或上传替换资产描述为数据回收；主 Agent 依据失败事实决定是否做单独的纠正或撤回操作。技术观察只引用 REQ-001 的“发布后观察计划”：本版本没有遥测、定时任务或自动上报；发布完成立刻做一次公开下载 SHA 校验，之后仅在用户反馈触发时读取本地诊断和问题记录。
+
 ### T012 模型管理与本段核心修正（worker 实现，待主 Agent 验收，2026-10-22）
 
 - **模型管理**：内置 `Qwen3ModelManifest.json` 只含 REQ-001 确定的 Qwen3-ASR 0.6B INT8、固定 revision、六个必需文件、总大小和 SHA-256。`ModelManager` 是唯一的文件与网络写入者，使用 operation generation 防止下载、校验、加载、删除的迟到回调恢复就绪状态。它只写 `Application Support/Shanshuo/Models/qwen3-asr-0.6b-int8`；`SHANSHUO_MODEL_DIR` 和开发 bundle 路径仅作为只读 seed，删除和修复不会触及它们。
