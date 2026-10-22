@@ -1,0 +1,47 @@
+{
+  "code_commit": "7b64a10",
+  "binary_sha256": "3d1586a2c8846979fa61a1a9263a166203e60063e886826c723248c423a9d3d9",
+  "count": 120,
+  "categories": {
+    "zh": {
+      "count": 40,
+      "error_rate_relaxed": 0.06479313036690086,
+      "error_rate_strict": 0.08106001558846454,
+      "empty": 0
+    },
+    "en": {
+      "count": 30,
+      "error_rate_relaxed": 0.5162287480680062,
+      "error_rate_strict": 0.517774343122102,
+      "empty": 14
+    },
+    "mixed": {
+      "count": 30,
+      "error_rate_relaxed": 0.12937062937062938,
+      "error_rate_strict": 0.14188034188034188,
+      "empty": 0
+    },
+    "entity": {
+      "count": 20,
+      "error_rate_relaxed": 0.03811944091486658,
+      "error_rate_strict": 0.03792667509481669,
+      "empty": 0
+    }
+  },
+  "decode_only_up_to_15s": {
+    "count": 109,
+    "p50_s": 1.182,
+    "p95_s": 2.0284,
+    "max_s": 2.504
+  },
+  "load": {
+    "event": "loaded",
+    "load_s": 1.474,
+    "rss_mb": 1066,
+    "threads": 4
+  },
+  "done": {
+    "event": "done",
+    "rss_mb": 1309
+  }
+}

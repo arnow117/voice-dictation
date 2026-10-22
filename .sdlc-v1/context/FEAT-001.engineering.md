@@ -94,6 +94,7 @@ flowchart LR
 
 - 异步插入与会话共用取消边界。Coordinator 取消时，插入器必须撤销尚未执行的粘贴、超时复制及相关回调；每次不可逆写入前重新检查当前操作和安全状态。旧会话不能凭迟到回调写入新会话。临时剪贴板只在仍由本应用持有时恢复。
 - ASR 返回可取消的 operation。取消立即使排队任务失效并释放尚未处理的音频；正在执行的同步原生块允许完成，但不得继续解码其余块。任务开始和每块开始前均检查取消状态，迟到结果不能回写。模型卸载仍在同一串行队列等待当前原生调用结束，不并发销毁识别器。取消长录音后，新听写只等待至多当前块结束。
+- 解码前的数字静音优化只跳过完全无有效非零信号的块，不能用整段 RMS 固定阈值判定“没有说话”。低音量有效语音必须进入识别；电平用于界面和诊断，不是语音分类器。此优化不是 VAD，也不替代 T015 的非零环境噪声/无语音测试；若实际无语音仍生成文本，须依据复现证据另行落实识别前语音检测，不能通过提高固定阈值再次丢弃低音量语音。
 - 会话期限、权限、安全输入和回执到期所需的主线程 Timer 注册到 RunLoop 的 common modes，菜单保持展开时仍需执行。录音上限不依赖用户关闭菜单。
 - AX 的屏幕坐标转换使用主显示器参考坐标（`NSScreen.screens.first`），不能以所有显示器的最高边或当前活跃屏幕作为转换原点。几何回归覆盖主屏上方、下方与负坐标屏幕；合成几何证据不代替多屏真机验证。
 - 模型管理为单一写入者：下载、暂停、换源、校验、删除、修复都带操作代次；过期回调不能重新启用旧模型。ASR 的创建、使用和卸载保持在同一串行队列；删除前先停止新会话，取消当前会话，等待卸载完成，再修改该模型目录。完成校验后才触发加载。
@@ -333,3 +334,11 @@ sequenceDiagram
 - **实际检查**：`bash tests/integration/run_model_downloader_harness.sh`、`run_model_downloader_http_harness.sh`、`run_model_manager_harness.sh`、`run_asr_cancellation_harness.sh`、`run_coordinator_harness.sh` 和 `run_screen_geometry_harness.sh` 均 exit 0。模型 harness 覆盖新下载、只读 seed、暂停/跨源 Range 续传、primary→mirror、完整/不完整 416、两次 checksum 失败、删除与迟到 load callback；downloader harness 直接驱动生产 URLSession delegate，覆盖 206、忽略 Range 的 200、无效 Range、超长 body 与 416；其 local HTTP fixture 绑定 loopback，仅作为显式测试依赖，复测同一协议分支。对既有只读 `.work/models/qwen3-asr-0.6b-int8` 实际逐文件流式 SHA-256 检查，内置清单六文件全部匹配。ASR harness 覆盖运行中取消只允许当前块结束、跳过其余块和排队已取消任务、下一短任务与 completion-aware unload。坐标 harness 覆盖主屏上方/下方/负坐标外屏；未连接真实第二显示器，仍需 T015 手测。`swift test` 的 13 个核心测试也通过；`xcrun swift-format lint` 与 `git diff --check` 通过。
 - **环境限制**：本工作树的 `bash scripts/build.sh` 在完成编译和链接后，`security unlock-keychain` 返回 exit 206（“One or more parameters passed to a function were not valid.”），因此本轮无法将签名后的 build 记为通过，也没有启动 GUI。此前长音频 ASR 夹具的模型/推理输入未改变；本段新增 ASR 生命周期覆盖不复用为实际长音频运行结果。真实模型下载、麦克风、权限、原生模型窗口、全屏/多显示器与 DEC-023 应用矩阵仍由主 Agent/T015 手测，未在此记录为通过。
 - **主 Agent 验收补充**：使用既有签名资源在沙箱外执行 `bash scripts/build.sh`，exit 0，构建 `20261022-123500`；未修改证书、钥匙串或密码。随后同一未提交快照执行 `bash scripts/test.sh`，exit 0，签名构建 `20261022-123523`：13 个 Swift 测试、Coordinator（含真实 eventTracking RunLoop Timer）、TextInserter、几何、ASR 取消、ModelManager、生产 URLSession delegate 与 loopback HTTP 下载 harness 全部通过；8 条实际 ASR 夹具中文/英文/混说/实体错误率为 0.0% / 7.5% / 5.7% / 1.4%，180 秒九块保留尾段，零信号无文本。原解锁错误由沙箱访问条件造成，当前签名 build 已通过。主 Agent 复核取消 operation、无整段 audio 的排队 closure 捕获、流式校验、嵌套 tokenizer 目录和主屏坐标转换，接受 T012 及三项核心修正的 build；最终权限、麦克风、质量与兼容性条件仍待 T015。
+- **冻结提交中间审查（`7b64a10`）**：独立 reviewer 静态检查本段模型生命周期、六文件首次下载、Range/416 恢复和三项核心修正，未发现可确认、可操作的 P1/P2。审查没有自行执行测试或真实下载，不替代 T015 和最终生命周期 review；未推进 review 状态。
+
+### 全量生产识别复测发现（`7b64a10`，2026-10-22）
+
+- 用签名构建 `20261022-123523` 的冻结二进制运行全部 120 条公开夹具，exit 0；二进制 SHA-256 为 `3d1586a2c8846979fa61a1a9263a166203e60063e886826c723248c423a9d3d9`。当前中文/英文/混说/实体宽松错误率为 6.48% / 51.62% / 12.94% / 3.81%，英文 14 条空输出；不能复用此前八条冒烟为全量质量 PASS。
+- 生产输出显示这 14 条均为 `decoded_chunk_count = 0`。逐条读取原始公开 WAV 测得 RMS 约 0.00047～0.00088，全部低于 `AudioChunking.hasAudibleSignal` 的 0.001 固定阈值。对 `en-003` 做最小对照：原音频不进入解码；仅在任务临时副本提高音量至 RMS 0.01 后，同一冻结二进制解码一次并输出完整英文。因果已定位到解码前固定 RMS 过滤，非模型无响应或结果清理。
+- 当前有效方案已改为仅跳过数字静音，交同一 worker 修正并补低音量真实夹具回归；修正后重跑未增益的全部 120 条。旧结果保留为失败证据，不调换测试集或放宽评分。109 条不超过 15 秒音频的纯解码 P50 1.182 秒 / P95 2.0284 秒；这是组件时间，不能记为端到端延迟，NFR-002 仍待完整测试和产品决定。
+- 中文 `zh-018` 的单条退化在新进程和同静态库直接 C API 均复现，1024/2048 缓存对照相同；同版本 Python API 则两种缓存均正确。已在两分钟限制内完成此诊断，排除 Swift 层、会话积累与两个缓存值作为单独原因；未修改生产参数，不继续盲试。这个中文质量问题的有界诊断已使用，后续不得以重命名或换人重复取得诊断额度。当前仅有全量测试的新失败证据，尚未有针对该中文问题的实现尝试；若最终仍超过质量阈值，按产品规则请求具体决定。报告与原始结果链接见 `docs/validation/asr-7b64a10.md`。
