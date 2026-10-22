@@ -61,6 +61,9 @@ bash "$ROOT/tests/integration/run_onboarding_state_harness.sh"
 echo "== native window construction harness"
 bash "$ROOT/tests/integration/run_native_window_construction_harness.sh"
 
+echo "== application main menu harness"
+bash "$ROOT/tests/integration/run_application_main_menu_harness.sh"
+
 echo "== ASR cancellation harness"
 bash "$ROOT/tests/integration/run_asr_cancellation_harness.sh"
 

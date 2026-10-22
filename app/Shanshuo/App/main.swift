@@ -189,27 +189,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   /// An accessory application still needs a main menu while one of its native windows is key.
   /// Status-item key equivalents alone do not receive Command-Comma from the focused window.
   private func makeApplicationMenu() -> NSMenu {
-    let mainMenu = NSMenu()
-    let applicationItem = NSMenuItem(
-      title: ShanshuoInfo.displayName, action: nil, keyEquivalent: "")
-    let applicationMenu = NSMenu(title: ShanshuoInfo.displayName)
-
-    let settingsItem = NSMenuItem(title: "设置…", action: #selector(openSettings), keyEquivalent: ",")
-    settingsItem.target = self
-    applicationMenu.addItem(settingsItem)
-    applicationMenu.addItem(.separator())
-
-    let quitItem = NSMenuItem(
-      title: "退出\(ShanshuoInfo.displayName)",
-      action: #selector(NSApplication.terminate(_:)),
-      keyEquivalent: "q"
+    ApplicationMainMenu.make(
+      applicationName: ShanshuoInfo.displayName,
+      settingsTarget: self,
+      settingsAction: #selector(openSettings),
+      terminationTarget: NSApp
     )
-    quitItem.target = NSApp
-    applicationMenu.addItem(quitItem)
-
-    applicationItem.submenu = applicationMenu
-    mainMenu.addItem(applicationItem)
-    return mainMenu
   }
 
   private func configureModelManager() {

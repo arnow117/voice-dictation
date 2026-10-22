@@ -39,6 +39,7 @@ swiftc -swift-version 5 -target arm64-apple-macos14.0 -module-cache-path "$WORK/
   "$ROOT/app/Shanshuo/UI/HistoryWindowController.swift" \
   "$ROOT/app/Shanshuo/UI/ModelManagementWindowController.swift" \
   "$ROOT/app/Shanshuo/UI/OnboardingWindowController.swift" \
+  "$ROOT/app/Shanshuo/UI/PracticeTextView.swift" \
   "$ROOT/app/Shanshuo/UI/PrivacyWindowController.swift" \
   "$ROOT/app/Shanshuo/UI/SettingsWindowController.swift" \
   "$ROOT/tests/integration/native_window_construction_harness.swift" \

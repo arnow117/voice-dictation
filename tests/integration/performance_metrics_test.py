@@ -7,6 +7,8 @@ import importlib.util
 import json
 import os
 import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 import uuid
@@ -338,6 +340,11 @@ class PerformanceMetricsTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             REPORT_METRICS.validate_event(unknown_key)
 
+        invalid_process_id = dict(no_duration)
+        invalid_process_id["process_id"] = "not-a-uuid"
+        with self.assertRaises(ValueError):
+            REPORT_METRICS.validate_event(invalid_process_id)
+
         invalid_duration = dict(no_duration)
         invalid_duration["audio_duration_ns"] = True
         with self.assertRaises(ValueError):
@@ -376,6 +383,59 @@ class PerformanceMetricsTest(unittest.TestCase):
         self.assertEqual(report["invalid_diagnostic_lines"], [])
         self.assertEqual(short["failed_samples"], 0)
         self.assertEqual(short["unknown_duration_samples"], 0)
+
+    @unittest.skipUnless(SWIFT_EVENT_JSONL, "Swift JSON fixture is supplied by the integration runner")
+    def test_swift_encoded_uuid_selectors_match_upper_and_lower_case(self) -> None:
+        assert SWIFT_EVENT_JSONL is not None
+        fixture_path = Path(SWIFT_EVENT_JSONL)
+        directory = fixture_path.parent
+        raw_event = json.loads(fixture_path.read_text(encoding="utf-8"))
+        raw_process_id = raw_event["process_id"]
+        raw_session_id = raw_event["session_id"]
+        canonical_process_id = str(uuid.UUID(raw_process_id))
+        canonical_session_id = str(uuid.UUID(raw_session_id))
+
+        self.assertEqual(raw_process_id, raw_process_id.upper())
+        self.assertEqual(raw_session_id, raw_session_id.upper())
+
+        events, invalid_lines = REPORT_METRICS.read_events(directory)
+        self.assertEqual(invalid_lines, [])
+        self.assertEqual(events[0]["process_id"], canonical_process_id)
+        self.assertEqual(events[0]["session_id"], canonical_session_id)
+
+        for process_selector in (raw_process_id.upper(), raw_process_id.lower()):
+            for session_selector in (raw_session_id.upper(), raw_session_id.lower()):
+                output_path = directory / (
+                    f"summary-{process_selector[0]}-{session_selector[0]}-"
+                    f"{uuid.uuid4().hex}.json"
+                )
+                command = [
+                    sys.executable,
+                    str(MODULE_PATH),
+                    "--diagnostics-dir",
+                    str(directory),
+                    "--output",
+                    str(output_path),
+                    "--expected-cold-start-samples",
+                    "0",
+                    "--expected-display-samples",
+                    "0",
+                    "--expected-short-samples",
+                    "0",
+                    "--expected-long-samples",
+                    "0",
+                    "--process-id",
+                    process_selector,
+                    "--session-id",
+                    session_selector,
+                ]
+                result = subprocess.run(command, capture_output=True, text=True, check=False)
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                summary = json.loads(output_path.read_text(encoding="utf-8"))
+                self.assertEqual(summary["diagnostic_event_count"], 1)
+                self.assertEqual(summary["selected_process_id"], canonical_process_id)
+                self.assertEqual(summary["selected_session_id"], canonical_session_id)
 
     def test_session_selection_limits_the_measurement_set(self) -> None:
         process_id = str(uuid.uuid4())

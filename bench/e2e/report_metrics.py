@@ -92,6 +92,7 @@ def read_events(directory: Path) -> tuple[list[dict[str, Any]], list[str]]:
             try:
                 event = json.loads(line)
                 validate_event(event)
+                event = canonicalize_event_identity(event)
             except (json.JSONDecodeError, ValueError, TypeError) as error:
                 invalid_lines.append(f"{path.name}:{line_number}: {error}")
                 continue
@@ -111,8 +112,8 @@ def validate_event(event: dict[str, Any]) -> None:
         raise ValueError("unsupported schema version")
     if event["kind"] not in EVENT_KINDS or event["result"] not in EVENT_RESULTS:
         raise ValueError("unknown event kind or result")
-    uuid.UUID(event["process_id"])
-    uuid.UUID(event["session_id"])
+    canonical_uuid(event["process_id"])
+    canonical_uuid(event["session_id"])
     if not isinstance(event["monotonic_ns"], int) or event["monotonic_ns"] < 0:
         raise ValueError("invalid monotonic timestamp")
     audio_duration_ns = event.get("audio_duration_ns")
@@ -122,6 +123,22 @@ def validate_event(event: dict[str, Any]) -> None:
         or audio_duration_ns < 0
     ):
         raise ValueError("invalid audio duration")
+
+
+def canonical_uuid(value: Any) -> str:
+    if not isinstance(value, str):
+        raise ValueError("diagnostic UUID must be a string")
+    try:
+        return str(uuid.UUID(value))
+    except (AttributeError, TypeError, ValueError) as error:
+        raise ValueError("invalid diagnostic UUID") from error
+
+
+def canonicalize_event_identity(event: dict[str, Any]) -> dict[str, Any]:
+    canonical_event = dict(event)
+    canonical_event["process_id"] = canonical_uuid(event["process_id"])
+    canonical_event["session_id"] = canonical_uuid(event["session_id"])
+    return canonical_event
 
 
 def percentile(values: list[float], percentage: float) -> float | None:
@@ -142,7 +159,7 @@ def milliseconds(value_ns: int) -> float:
 
 def uuid_argument(value: str) -> str:
     try:
-        return str(uuid.UUID(value))
+        return canonical_uuid(value)
     except ValueError as error:
         raise argparse.ArgumentTypeError("must be a UUID") from error
 
@@ -388,6 +405,10 @@ def report(arguments: argparse.Namespace) -> dict[str, Any]:
     events, invalid_lines = read_events(arguments.diagnostics_dir)
     selected_process_id = getattr(arguments, "process_id", None)
     selected_session_id = getattr(arguments, "session_id", None)
+    if selected_process_id is not None:
+        selected_process_id = canonical_uuid(selected_process_id)
+    if selected_session_id is not None:
+        selected_session_id = canonical_uuid(selected_session_id)
     if selected_process_id is not None:
         events = [event for event in events if event["process_id"] == selected_process_id]
     if selected_session_id is not None:

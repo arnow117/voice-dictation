@@ -897,12 +897,3 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate, NS
     (OnboardingStep.allCases.firstIndex(of: step) ?? 0) + 1
   }
 }
-
-private final class PracticeTextView: NSTextView {
-  var onPaste: (() -> Void)?
-
-  override func paste(_ sender: Any?) {
-    onPaste?()
-    super.paste(sender)
-  }
-}

@@ -478,3 +478,19 @@ T015 测量代码返回后，主 Agent 安排既有独立 reviewer 只读复核�
 随后对真实生产日志运行 `report_metrics.py`，发现 Swift Optional nil 省略 `audio_duration_ns`，而 Python 固定键集合要求它存在，导致合法的 process/ready/hotkey 等事件被拒绝，仅有时长的 stop 被接收。旧 Python 夹具均显式写 null，未覆盖生产编码边界。schema_version 1 的有效契约据此明确为六个必需键与唯一可选的 `audio_duration_ns`；后者缺省/null 均代表未知，未知额外键或缺少必需键仍拒绝。同一 worker 修正 reader 并补真实 Swift 序列化到 Python 读取的回归；不删除旧日志或忽略 invalid，不把格式失败当作性能失败样本消失。三次启动和 CPU 的原始算术证据保留，自动汇总在修正前不可用于通过声明。
 
 worker 返回签名构建 `20261022-155005`：播放器等待退出并返回真实失败，时钟域显式区分；Python 10 项含真实 Swift 编码回归、受控播放器进程、diagnostics/Coordinator/Onboarding/native-window harness、formatter 与 `SKIP_ASR=1 bash scripts/test.sh` 均 exit 0。主 Agent 复核差异后，实际用修正 reader 重新读取原始 145800 日志，85 个事件、invalid=0，cold maximum=4102.56425 ms/3 成功；没有将其他缺失指标改为通过。练习只增加固定枚举观察与同一 attempt UUID，未猜测修正或放宽验证条件；其根因仍待新构建实际区分。接受这份有界诊断/测量修正的 build，T015 保持进行中。
+
+`155005` 后续记录到三次物理按键（采集 2.085、1.385、5.485 秒），三次都在绑定时明确拒绝 `practice_binding_window_not_key`，没有进入 practice outcome/validation。只读进程检查确认仅有本任务 `155005` 一个闪说实例，排除了多个测试构建并发监听的假设。本轮证据定位了当前未激活的窗口条件，不能倒推旧 `145800` 的所有失败原因。主 Agent 保留 key-window/first-responder 校验，用 CUA Raise 并聚焦练习框，再请用户点击标题栏、点击框并说公开测试句；不依赖已超时的播放器等待，不修改验证逻辑或声称练习已通过。
+
+激活窗口后的两次真实按键已产生 `practice_binding_accepted`、`practice_outcome_received` 和 `practice_outcome_target_matched`；`paste_requested` 后没有 `practice_paste_observed`，最终为 `practice_validation_readback_mismatch`，CUA 看到练习框仍空。用户同时报告备忘录中按住热键输入已经生效；此为定性实测反馈，没有足够上下文计入十次正式矩阵。
+
+主 Agent 对同一练习控件做了最小 CUA 对照：`app.paste` 公开标记无变化；普通 `typeText("TEST")` 出现 TEST；接着 ⌘A 再输入 X 得到 TESTX，没有全选替换。源码 `makeApplicationMenu` 仅包含设置与退出，缺少标准编辑命令。有效方案据此更新为补齐生产 AppKit 编辑菜单，使用标准响应链与当前 first responder 路由粘贴/全选/剪切/复制；保留已有设置/退出。不直接给练习填识别结果、不扩 AX 白名单、不伪造 paste 回调或放宽 readback/attempt/initialText 校验。同一 worker 负责完整实现与必要生产回归，主 Agent 用 CUA 先验证标准粘贴/全选，然后再验证真实听写；此前失败和诊断历史继续保留。
+
+### T015 标准编辑菜单修复的 build 验收（2026-10-22）
+
+worker 返回 `20261022-165625`，生产 `ApplicationMainMenu` 增加 nil-target 原生剪切/复制/粘贴/全选，原设置/退出保留；`PracticeTextView` 仅从私有嵌套类移至独立生产文件，真实 paste 观察及练习证明不变。完整 `SKIP_ASR=1 bash scripts/test.sh`、formatter/diff 检查和签名检查 exit 0。菜单 harness 检查生产命令和原生 view action；环境无法使用共享剪贴板的分支明确跳过数据与恢复检查，不将其视为真实粘贴证据。
+
+主 Agent 在冻结 app 上实际执行同一 CUA 对照：⌘V 出现公开标记、⌘A 后输入 X 将整段替换为 X、⌘A + Backspace 清空，三项均通过；手工标记没有启用练习继续按钮。这补足真实界面证据，接受本段 build；真实听写练习仍待用户按键确认，T015 未完成。
+
+另外，实际 CLI process selector 暴露大小写身份问题：Swift UUID.uuidString 为大写、CLI 参数先转小写，原字串比较导致合法生产日志选择为空。worker 在 validated reader 的副本和 selector 边界统一 canonical UUID，原日志不变；11 项 metrics 回归包含真实 Swift 大写编码和大小写 process/session 选择。主 Agent 使用先前失败的同一大写 process UUID 重跑，exit 0、选中 93 个有效事件、invalid=0。未知字段、非法 UUID、失败与缺失样本仍拒绝或保留分母。
+
+用户另明确授权本次验证临时开启系统辅助功能键盘与旁白，并在结束后恢复原状态。辅助功能键盘开关由 off→on，经 CUA 和只读进程信息确认已开启，但工具只读到空面板，不能可靠操作按键；已在系统确认弹窗选择关闭，并实际读到开关 off。全键盘控制、粘滞键、慢速键始终 off。此探索没有产出自动全局按键通过证据。旁白尚未开启或验证，后续仍按授权单独执行并恢复。
