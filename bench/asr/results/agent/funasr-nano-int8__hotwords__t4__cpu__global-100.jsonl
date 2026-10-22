@@ -1,0 +1,22 @@
+{"type": "meta", "model": "funasr-nano-int8", "task": "hotwords", "threads": 4, "provider": "cpu", "hotwords_mode": "global-100", "rss_before_mb": 33.2, "qos": {"darwin_bg_before": 0, "clear_bg_rc": 0, "darwin_bg_after": 0, "set_qos_rc": 0, "qos_now": "0x21"}, "hotword_base": 23, "hotword_count_example": 100, "load_s": 3.022, "rss_after_load_mb": 3100.8, "warmup_s": 0.1929184999971767, "rss_after_warmup_mb": 3163.1}
+{"type": "clip", "id": "entity-001", "category": "entity", "duration": 9.796, "target_s": null, "hyp": "", "decode_s": 0.2006, "rebuild_s": null, "hotword_count": 100, "error": null}
+{"type": "clip", "id": "entity-002", "category": "entity", "duration": 8.142, "target_s": null, "hyp": "", "decode_s": 0.1818, "rebuild_s": null, "hotword_count": 100, "error": null}
+{"type": "clip", "id": "entity-003", "category": "entity", "duration": 10.928, "target_s": null, "hyp": "", "decode_s": 0.2287, "rebuild_s": null, "hotword_count": 100, "error": null}
+{"type": "clip", "id": "entity-004", "category": "entity", "duration": 7.271, "target_s": null, "hyp": "", "decode_s": 0.1818, "rebuild_s": null, "hotword_count": 100, "error": null}
+{"type": "clip", "id": "entity-005", "category": "entity", "duration": 13.497, "target_s": null, "hyp": "", "decode_s": 0.2746, "rebuild_s": null, "hotword_count": 100, "error": null}
+{"type": "clip", "id": "entity-006", "category": "entity", "duration": 12.016, "target_s": null, "hyp": "", "decode_s": 0.2648, "rebuild_s": null, "hotword_count": 100, "error": null}
+{"type": "clip", "id": "entity-007", "category": "entity", "duration": 14.324, "target_s": null, "hyp": "", "decode_s": 0.3175, "rebuild_s": null, "hotword_count": 100, "error": null}
+{"type": "clip", "id": "entity-008", "category": "entity", "duration": 15.543, "target_s": null, "hyp": "", "decode_s": 0.3539, "rebuild_s": null, "hotword_count": 100, "error": null}
+{"type": "clip", "id": "entity-009", "category": "entity", "duration": 12.626, "target_s": null, "hyp": "", "decode_s": 0.3016, "rebuild_s": null, "hotword_count": 100, "error": null}
+{"type": "clip", "id": "entity-010", "category": "entity", "duration": 7.184, "target_s": null, "hyp": "", "decode_s": 0.1689, "rebuild_s": null, "hotword_count": 100, "error": null}
+{"type": "clip", "id": "entity-011", "category": "entity", "duration": 15.325, "target_s": null, "hyp": "", "decode_s": 0.3505, "rebuild_s": null, "hotword_count": 100, "error": null}
+{"type": "clip", "id": "entity-012", "category": "entity", "duration": 10.971, "target_s": null, "hyp": "", "decode_s": 0.2415, "rebuild_s": null, "hotword_count": 100, "error": null}
+{"type": "clip", "id": "entity-013", "category": "entity", "duration": 9.404, "target_s": null, "hyp": "", "decode_s": 0.2381, "rebuild_s": null, "hotword_count": 100, "error": null}
+{"type": "clip", "id": "entity-014", "category": "entity", "duration": 9.883, "target_s": null, "hyp": "", "decode_s": 0.2081, "rebuild_s": null, "hotword_count": 100, "error": null}
+{"type": "clip", "id": "entity-015", "category": "entity", "duration": 13.366, "target_s": null, "hyp": "", "decode_s": 0.2898, "rebuild_s": null, "hotword_count": 100, "error": null}
+{"type": "clip", "id": "entity-016", "category": "entity", "duration": 8.707, "target_s": null, "hyp": "", "decode_s": 0.2417, "rebuild_s": null, "hotword_count": 100, "error": null}
+{"type": "clip", "id": "entity-017", "category": "entity", "duration": 10.275, "target_s": null, "hyp": "", "decode_s": 0.239, "rebuild_s": null, "hotword_count": 100, "error": null}
+{"type": "clip", "id": "entity-018", "category": "entity", "duration": 8.577, "target_s": null, "hyp": "", "decode_s": 0.2224, "rebuild_s": null, "hotword_count": 100, "error": null}
+{"type": "clip", "id": "entity-019", "category": "entity", "duration": 10.405, "target_s": null, "hyp": "", "decode_s": 0.2603, "rebuild_s": null, "hotword_count": 100, "error": null}
+{"type": "clip", "id": "entity-020", "category": "entity", "duration": 10.536, "target_s": null, "hyp": "", "decode_s": 0.2206, "rebuild_s": null, "hotword_count": 100, "error": null}
+{"type": "end", "rss_end_mb": 3166.7, "peak_rss_mb": 3166.7, "cpu_percpu_avg": [87.8, 87.7, 88.4, 85.3, 85.6, 85.8, 12.0, 10.9, 7.8, 7.3]}

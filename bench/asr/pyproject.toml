@@ -1,0 +1,19 @@
+[project]
+name = "shanshuo-asr-bench"
+version = "0.1.0"
+description = "FEAT-001 T001: local zh/en ASR model benchmark for Shanshuo (not shipped)"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "sherpa-onnx==1.13.8",
+    # native libraries (libonnxruntime, libsherpa-onnx-*) ship in this package;
+    # uv did not pull it in transitively on 2026-10-21, so it is listed explicitly.
+    "sherpa-onnx-core==1.13.8",
+    "numpy>=1.26",
+    "soundfile>=0.12",
+    "pyarrow>=15",
+    "opencc-python-reimplemented==0.1.7",
+    "psutil>=5.9",
+]
+
+[tool.uv]
+package = false

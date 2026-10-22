@@ -1,0 +1,53 @@
+{
+  "source_commit": "a33c82a plus uncommitted low-RMS fix at build 20261022-125650",
+  "build": "20261022-125650",
+  "binary_sha256": "8bb44cdad7fbd0d07cdb7c3286cc5185cf1f915a51108d73edd665a9cf091346",
+  "count": 120,
+  "categories": {
+    "zh": {
+      "count": 40,
+      "relaxed_error_rate": 0.06479313036690086,
+      "strict_error_rate": 0.08106001558846454,
+      "empty_outputs": 0,
+      "skipped_all_chunks": 0
+    },
+    "en": {
+      "count": 30,
+      "relaxed_error_rate": 0.06027820710973725,
+      "strict_error_rate": 0.061823802163833076,
+      "empty_outputs": 0,
+      "skipped_all_chunks": 0
+    },
+    "mixed": {
+      "count": 30,
+      "relaxed_error_rate": 0.12937062937062938,
+      "strict_error_rate": 0.14188034188034188,
+      "empty_outputs": 0,
+      "skipped_all_chunks": 0
+    },
+    "entity": {
+      "count": 20,
+      "relaxed_error_rate": 0.03811944091486658,
+      "strict_error_rate": 0.03792667509481669,
+      "empty_outputs": 0,
+      "skipped_all_chunks": 0
+    }
+  },
+  "latency_scope": "decode only; excludes capture, release, focus checks and insertion",
+  "decode_s_at_most_15s": {
+    "count": 109,
+    "p50": 1.383,
+    "p95": 2.2293999999999996
+  },
+  "loaded": {
+    "event": "loaded",
+    "load_s": 1.247,
+    "rss_mb": 988,
+    "threads": 4
+  },
+  "done": {
+    "event": "done",
+    "rss_mb": 1820
+  },
+  "nfr_003_pass": false
+}
