@@ -155,6 +155,7 @@ private final class FakeTextInserter: TextInserting {
 
   func copy(
     _ text: String,
+    requiresAccessibility: Bool,
     completion: @escaping (TextInsertionResult) -> Void
   ) -> TextInsertionOperation {
     FakeInsertionOperation()

@@ -34,7 +34,7 @@
 |---|---|---|
 | 启动 | `open <main checkout>/.work/build/Shanshuo.app` | 构建产物在主 checkout 的 `.work/build/`，不入库 |
 | 主流程 | `AppDelegate` → `DictationCoordinator` → 平台协议适配器、`Qwen3ASRService` → `Qwen3ChunkDecoder` / `Qwen3Recognizer` | Coordinator 为主线程会话所有者；ASR 在唯一 userInitiated 串行队列加载、使用与卸载（ED-002、ED-014，源码 `500ec4c`） |
-| 配置 | `Info.plist` 由 `scripts/build.sh` 生成；release 省略 `ShanshuoDevModelDir`，版本为 `0.1.0/1.0.1`，时间另存 `ShanshuoBuildTimestamp`；环境变量 `SHANSHUO_MODEL_DIR` 只供开发测试覆盖 | 不含 secret |
+| 配置 | `Info.plist` 由 `scripts/build.sh` 生成；release 省略 `ShanshuoDevModelDir`，修正后候选版本为 `0.1.0/1.0.2`，时间另存 `ShanshuoBuildTimestamp`；环境变量 `SHANSHUO_MODEL_DIR` 只供开发测试覆盖 | 不含 secret |
 | 身份、权限或外部凭据 | 公共源码默认 ad-hoc 开发构建，可指定自己的签名身份；项目 release 显式使用既有 "Shanshuo Test Signing"，通过 `SHANSHUO_SIGNING_DIR` 或独立 keychain/password-file 路径提供本地资源 | 私钥和密码文件不入库，缺失 release 签名配置必须失败 |
 
 ## 常用命令
@@ -109,9 +109,9 @@ config_paths: ["scripts/build.sh", "scripts/fetch-vendor.sh"]
 environments:
   dev: "开发构建：本机 .work/build/Shanshuo.app，读取 .work/models 下的模型"
   staging: "none"
-  canary: "测试版：CONFIG=release 构建、ED-012 身份签名的 .app/DMG，手动分发给测试用户（DEC-018，T016）"
-  full: "none"
-health_check: "菜单栏第二项显示\"语音模型：就绪\"；bash scripts/test.sh"
+  canary: "v0.1.0-beta.1：CONFIG=release，ED-012 测试签名；arm64 ZIP、DMG、SHA256SUMS.txt；未经 Apple 公证"
+  full: "源码与测试版分发：仅 arnow117/voice-dictation，main 与 GitHub prerelease v0.1.0-beta.1（DEC-022/025）"
+health_check: "安装路径进程及模型就绪；必要 native 回归、分发包内容与签名检查、公开资产下载后校验 SHA-256；原 NFR 未完成部分明确披露"
 ```
 
 ## 仓库上下文来源（Repository context sources）

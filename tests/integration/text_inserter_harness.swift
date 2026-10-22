@@ -234,7 +234,7 @@ private func testPerformanceEventsDescribeOnlyCompletedOrRequestedActions() {
   let harness = Harness()
   let copySessionID = UUID()
   harness.inserter.setPerformanceSessionID(copySessionID)
-  _ = harness.inserter.copy("copy this") { _ in }
+  _ = harness.inserter.copy("copy this", requiresAccessibility: false) { _ in }
   check(
     harness.performanceRecorder.events.contains {
       $0.kind == .copyCompleted
@@ -353,6 +353,72 @@ private func testClipboardChangeBeforePostNeverPastesUserClipboard() {
   }
 }
 
+private func testPermissionRevocationBeforePasteDiscardsWithoutCopying() {
+  func assertDiscardedAfterRevocation(
+    _ revoke: (Harness) -> Void,
+    label: String
+  ) {
+    let harness = Harness()
+    let original = harness.clipboard.snapshot()
+    var result: TextInsertionResult?
+    _ = harness.inserter.insert("dictated", expectedTarget: harness.target) { result = $0 }
+    revoke(harness)
+    harness.scheduler.advance(to: 0.03)
+
+    check(harness.poster.pastePosts == 0, "\(label) revocation must block Command-V")
+    check(harness.clipboard.textWrites == 0, "\(label) revocation must not make a final copy")
+    check(
+      harness.clipboard.snapshot() == original,
+      "\(label) revocation restores only the owned clipboard")
+    check(
+      !harness.clipboard.hasTemporaryTextProvider,
+      "\(label) revocation releases the temporary clipboard provider"
+    )
+    guard case .discarded? = result else {
+      check(false, "\(label) revocation must report discard")
+      return
+    }
+  }
+
+  assertDiscardedAfterRevocation(
+    { $0.permissions.microphonePermission = .denied }, label: "microphone")
+  assertDiscardedAfterRevocation(
+    { $0.permissions.accessibilityPermission = .denied },
+    label: "Accessibility"
+  )
+}
+
+private func testCopyPolicyPreservesCopyOnlyWithoutAccessibility() {
+  let copyOnlyHarness = Harness()
+  copyOnlyHarness.permissions.accessibilityPermission = .denied
+  var copyOnlyResult: TextInsertionResult?
+  _ = copyOnlyHarness.inserter.copy("copy-only", requiresAccessibility: false) {
+    copyOnlyResult = $0
+  }
+  check(
+    copyOnlyHarness.clipboard.textWrites == 1,
+    "copy-only writes the clipboard without Accessibility")
+  guard case .copied? = copyOnlyResult else {
+    check(false, "copy-only reports its successful explicit clipboard write")
+    return
+  }
+
+  let directFallbackHarness = Harness()
+  directFallbackHarness.permissions.accessibilityPermission = .denied
+  var directFallbackResult: TextInsertionResult?
+  _ = directFallbackHarness.inserter.copy("direct fallback", requiresAccessibility: true) {
+    directFallbackResult = $0
+  }
+  check(
+    directFallbackHarness.clipboard.textWrites == 0,
+    "a direct-session fallback cannot write after Accessibility is revoked"
+  )
+  guard case .discarded? = directFallbackResult else {
+    check(false, "a direct-session fallback reports discard after Accessibility revocation")
+    return
+  }
+}
+
 private func testForeignClipboardAndSupersedingOperationStaySafe() {
   let harness = Harness()
   var firstResults: [TextInsertionResult] = []
@@ -368,7 +434,7 @@ private func testForeignClipboardAndSupersedingOperationStaySafe() {
   check(firstResults.isEmpty, "cancelled first operation remains silent")
 
   var secondResult: TextInsertionResult?
-  _ = harness.inserter.copy("second") { secondResult = $0 }
+  _ = harness.inserter.copy("second", requiresAccessibility: false) { secondResult = $0 }
   check(harness.clipboard.textWrites == 1, "superseding operation performs its own explicit copy")
   guard case .copied? = secondResult else {
     check(false, "explicit copy reports success only after its write")
@@ -405,6 +471,8 @@ enum TextInserterHarnessMain {
     testSecureCancellationCannotResumeAfterLeavingSecureInput()
     testNoReadTimeoutRestoresRatherThanClaimingCopy()
     testClipboardChangeBeforePostNeverPastesUserClipboard()
+    testPermissionRevocationBeforePasteDiscardsWithoutCopying()
+    testCopyPolicyPreservesCopyOnlyWithoutAccessibility()
     testForeignClipboardAndSupersedingOperationStaySafe()
     testEscapeInterceptionSnapshotsCurrentState()
     print("text inserter harness passed")

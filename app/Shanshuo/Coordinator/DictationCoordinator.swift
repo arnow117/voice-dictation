@@ -402,7 +402,7 @@ final class DictationCoordinator {
       timestamp: hotkeyTimestamp,
       audioDuration: nil
     )
-    guard phase == .idle, microphoneTestOperation == nil else {
+    guard phase == .idle, !isMicrophoneTestActive else {
       indicator.showBusyFeedback()
       recordAttemptFinished(id: attemptID, result: .failed)
       return
@@ -614,7 +614,7 @@ final class DictationCoordinator {
     guard isCurrentRecognizingSession(completionGeneration) else {
       return
     }
-    guard permissions.microphonePermission.isAuthorized else {
+    guard permissionsAreStillAllowed(for: session) else {
       cancel(message: "权限已撤销，本次内容已丢弃")
       return
     }
@@ -638,6 +638,11 @@ final class DictationCoordinator {
       return
     }
 
+    guard permissionsAreStillAllowed(for: session) else {
+      cancel(message: "权限已撤销，本次内容已丢弃")
+      return
+    }
+
     let currentTarget = focusInspector.snapshot()
     let context = InsertionContext(
       releasedTarget: releaseTarget.target,
@@ -655,21 +660,30 @@ final class DictationCoordinator {
     case .discard:
       finish(message: decision.message)
     case .copy:
-      startInsertion(text: text, generation: completionGeneration) { completion in
-        self.textInserter.copy(text, completion: completion)
+      startInsertion(session: session, text: text, generation: completionGeneration) { completion in
+        self.textInserter.copy(
+          text,
+          requiresAccessibility: session.insertionMode == .directInsertion,
+          completion: completion
+        )
       }
     case .insert:
-      startInsertion(text: text, generation: completionGeneration) { completion in
+      startInsertion(session: session, text: text, generation: completionGeneration) { completion in
         self.textInserter.insert(text, expectedTarget: releaseTarget, completion: completion)
       }
     }
   }
 
   private func startInsertion(
+    session: ActiveSession,
     text: String,
     generation completionGeneration: SessionGeneration,
     start: (@escaping (TextInsertionResult) -> Void) -> TextInsertionOperation
   ) {
+    guard permissionsAreStillAllowed(for: session) else {
+      cancel(message: "权限已撤销，本次内容已丢弃")
+      return
+    }
     let operation = InsertionOperationSlot()
     pendingInsertion = operation
     let underlyingOperation = start { [weak self, weak operation] result in
@@ -706,6 +720,10 @@ final class DictationCoordinator {
     pendingInsertion = nil
     cancelIfSecureInputActive()
     guard activeSession?.generation == completionGeneration, phase == .inserting else {
+      return
+    }
+    guard permissionsAreStillAllowed(for: session) else {
+      cancel(message: "权限已撤销，本次内容已丢弃")
       return
     }
 
@@ -904,6 +922,14 @@ final class DictationCoordinator {
   private func isCurrentRecognizingSession(_ completionGeneration: SessionGeneration) -> Bool {
     activeSession?.generation == completionGeneration && phase == .recognizing
       && !secureInputLatched
+  }
+
+  private func permissionsAreStillAllowed(for session: ActiveSession) -> Bool {
+    guard permissions.microphonePermission.isAuthorized else {
+      return false
+    }
+    return session.insertionMode != .directInsertion
+      || permissions.accessibilityPermission.isAuthorized
   }
 
   private func cancelAudioOperation() {

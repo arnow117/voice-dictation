@@ -106,6 +106,7 @@ flowchart LR
 - 原生练习绑定在每次按下前根据实际可见窗口、当前步骤和 first responder 重新确认；误触、取消或空输出后可直接重试，不因一次性 claim 耗尽而把后续练习写入历史。无辅助功能时也用本应用原生控件事实验证，不能只以相同 PID 代替实时练习焦点。麦克风测试的延迟启动须校验同一页面/窗口代次及实际可见状态，关闭或离页先使尚未执行的启动失效。
 - 练习离页/关窗取消属于该练习 binding 的活动采集、识别和延迟插入，不能影响其他正常听写；同时使迟到 outcome、控件读回和粘贴检查失效。练习证明按本次 attempt/session 与实际编辑或粘贴事件建立关联，旧控件值恰好等于识别结果不能单独作为实际插入证明，`.unverified` 也不能直接视作已交付。
 - 麦克风测试在停止音频队列完成前保留 stopping operation 和取消能力；排队停止请求强持有其 operation 至执行完毕，所有异步停止完成均检查代次。关闭、重试或暂停不能让旧完成更改新测试状态；停止阶段继续与听写互斥。
+- 权限取消不能只依赖周期刷新：识别结果交付、开始写入及插入完成发布 outcome 前，Coordinator 按按下时捕获的会话模式重查麦克风和所需辅助功能权限。直接会话撤销辅助功能后丢弃，不临时降为复制；原本就是仅复制的会话仍可缺少辅助功能。TextInserting.copy 显式接收 requiresAccessibility，由原会话模式决定；生产插入器在 AX、Unicode、临时/最终剪贴板写入及延迟 Command-V 前检查当前麦克风和该操作所需辅助功能权限，失效时丢弃并只恢复仍归本次拥有的剪贴板。
 - 历史读写、删除和清空失败通过 AppModel 共享状态持久发布；失败不得被周期状态刷新或一次成功查询清掉，窗口提供明确失败与重试操作。只在相应操作成功后清除其错误状态。
 - 原生窗口必须先建立父子视图层次，再激活跨视图约束。构建检查之外，生产窗口构造与布局 harness 实例化模型、引导、历史和隐私窗口（及后续设置窗口），验证没有 Objective-C 布局异常；不能把“Swift 编译成功”视为窗口能创建。首次启动窗口仍需 CUA 实际观察。
 - 偏好快捷键与当前有效快捷键分别建模；无辅助功能时强制有效值为 ⌃⇧ Space，保留用户偏好。自定义支持单修饰键及修饰键加普通键，拒绝无修饰普通键和系统保留组合，失败必须显示实际未注册状态。Fn 系统占用仅检测并给出系统设置入口，不静默修改系统键盘偏好。
@@ -367,7 +368,11 @@ DEC-024 的 120 条原始评测未重跑：中文 CER 6.48% 与混说 MER 12.94%
 
 ## 评审记录（实际）
 
-尚未开始。
+### 最终 review：`2e214409`（2026-10-22）
+
+独立 reviewer 返回 changes_requested，主 Agent 已对照生产代码核实两项 P2。第一项：direct 会话在 AX 撤销后、周期 refresh 前收到识别结果时，会降为 copy 并发布可写历史 outcome；延迟 Command-V 也未重查麦克风权限。第二项：beginRecording 只排除运行中的麦克风测试，没有排除 stopping operation，自然停止回调延迟期间可开始第二次采集。两项均违反当前核心权限或互斥约束，接受修正；现有验证保留为旧候选证据，不能覆盖修正后的源码。review 未运行新测试，也未声称真机复现；其余未测指标按 DEC-025 继续披露。本次 diff 未发现有证据支持的重复实现或可避免工程债。
+
+T010 重新打开，由同一 core_delivery worker 完成有界修正与生产 harness；使用现有 isMicrophoneTestActive 保持停止期互斥，权限按上方明确的原会话模式处理。必须覆盖无周期 refresh 的撤权时序、延迟粘贴撤权、无 AX 的合法 copy-only，以及停止回调之前热键无第二次 start。随后 T016 重新生成发行包，最终 validate/review 绑定新版本，不发布旧候选文件。
 
 ## 发布与观察记录（实际）
 
@@ -561,3 +566,19 @@ worker 返回 `20261022-165625`，生产 `ApplicationMainMenu` 增加 nil-target
 ### T016 beta 分发文档刷新（worker，待主 Agent 验收，2026-10-22）
 
 主 Agent 在 `/Applications` 的实际安装 smoke 记录首次 cold-start ready 为 9.106562875 秒，已将 `docs/known-issues.md` 的用户可见事实更新为 9.11 秒。worker 没有重编译、重签、启动或修改冻结 app：以既有 staging 内的签名 app 为唯一输入，其 `Contents/MacOS/Shanshuo` SHA-256 在刷新前后及 ZIP 解包/只读 DMG 挂载中均为 `64e43ec79ed67b33087a687c2b21424f93a02f0c48aef04dc5e90dbbb3d2bc38`。仅将更新后的 known-issues 文档复制到 ZIP/DMG staging，重新归档并生成清单；严格 bundle/signature、ZIP/DMG 链接、只读挂载、包内 9.11 秒文本和正常 detach 均通过。新 ZIP SHA-256 为 `ca076935724ebcaf038e5cad62129d223e617500c3b1a24e86554270751bb329`，DMG 为 `d1d281f1b4254ebb4fa7468cf0facbdd701701470577c5f8a541acb769a17753`。
+
+### T010 permission and microphone-test stopping review repair (worker; pending parent acceptance, 2026-10-22)
+
+- A dictation session now rechecks the permissions required by its press-time insertion mode at recognition delivery, immediately before starting a text effect, and before publishing an insertion outcome. A direct session whose microphone or Accessibility authorization was revoked is discarded; the original copy-only mode continues to work without Accessibility.
+- `TextInserting.copy` now receives the press-time Accessibility policy. The production inserter checks microphone plus that policy before temporary/final clipboard writes, AX/Unicode insertion, delayed Command-V, and deferred completion. A revoked permission discards the operation, restores only a still-owned clipboard snapshot, releases the temporary provider, and does not publish text.
+- Recording now treats a microphone test whose natural timer has requested an asynchronous stop as active until its stop completion returns, preventing an overlapping hotkey capture; recording resumes after that completion.
+- Red evidence before the implementation: `bash tests/integration/run_coordinator_harness.sh` failed for direct Accessibility revocation before ASR delivery, and `bash tests/integration/run_text_inserter_harness.sh` failed because microphone revocation still posted Command-V. Both passed after the scoped repair, together with native window construction.
+- Verification passed: scoped `swift-format format` and `swift-format lint`; `git diff --check`; coordinator, text-inserter, and native-window harnesses; and `SHANSHUO_VENDOR_CACHE=/Users/arnow117/hansen_agent_team/workspace/20261021-voice-dictation/.work/vendor SKIP_ASR=1 bash scripts/test.sh` (13 Swift tests plus all listed integration harnesses/build, exit 0). No GUI, live permission, microphone, clipboard, or 120-fixture ASR run was performed by this repair.
+
+### T016 repaired beta candidate packaging (worker; pending parent acceptance, 2026-10-22)
+
+- Rebuilt the accepted T010 permission-revocation and microphone-test-stop repair as a separate distribution candidate. `scripts/build.sh` now emits `CFBundleVersion` `1.0.2`; the short version remains `0.1.0`.
+- Added a concise release-note entry describing discard-on-revocation behavior and exclusion of new capture while a naturally ended microphone test is still stopping. Existing limits and disclosures remain unchanged.
+- Signed release build and archive command passed with the owned vendor cache and existing `Shanshuo Test Signing` configuration. The frozen app reports build timestamp `2026-10-22T12:05:40Z`, executable SHA-256 `f35b33699c1e4ebe0c9d6d1ff5a7bde5c4e1a230c980b02cfc84009adb974f7e`, arm64, hardened runtime/audio entitlement, no `ShanshuoDevModelDir`, and no checkout path.
+- ZIP/DMG verification passed, including checksum validation, read-only DMG attach/detach, bundle signature/architecture/dependency checks, bundled documents, and packaged Markdown links. Its designated requirement matches the installed 1.0.1 candidate (`identifier "com.arnow117.shanshuo"` with the project signing root), while this is a new binary and must be installed/tested separately by the parent.
+- Artifacts are isolated under `.work/dist/v0.1.0-beta.1-final`; no application was launched, stopped, installed, or modified, and no ASR evaluation was rerun because inference inputs did not change.

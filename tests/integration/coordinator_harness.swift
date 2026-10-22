@@ -105,7 +105,11 @@ protocol TextInserting: AnyObject {
   ) -> TextInsertionOperation
 
   @discardableResult
-  func copy(_ text: String, completion: @escaping (TextInsertionResult) -> Void)
+  func copy(
+    _ text: String,
+    requiresAccessibility: Bool,
+    completion: @escaping (TextInsertionResult) -> Void
+  )
     -> TextInsertionOperation
 }
 
@@ -340,6 +344,7 @@ private final class FakeInsertionOperation: TextInsertionOperation {
 private final class FakeInserter: TextInserting {
   var insertCalls = 0
   var copyCalls = 0
+  private(set) var copyRequiresAccessibility: [Bool] = []
   var deferCompletion = false
   private let clock: DictationClock
   private var completion: ((TextInsertionResult) -> Void)?
@@ -367,10 +372,15 @@ private final class FakeInserter: TextInserting {
   }
 
   @discardableResult
-  func copy(_ text: String, completion: @escaping (TextInsertionResult) -> Void)
+  func copy(
+    _ text: String,
+    requiresAccessibility: Bool,
+    completion: @escaping (TextInsertionResult) -> Void
+  )
     -> TextInsertionOperation
   {
     copyCalls += 1
+    copyRequiresAccessibility.append(requiresAccessibility)
     let operation = FakeInsertionOperation()
     latestOperation = operation
     if deferCompletion {
@@ -1248,6 +1258,136 @@ private func testDirectSessionCancelsWhenAccessibilityIsRevoked() {
   check(harness.audio.cancellationCount == 1, "revocation cancels the active direct capture")
 }
 
+private func testLatePermissionRevocationDiscardsWithoutOutcome() {
+  let microphoneRecognitionHarness = Harness()
+  microphoneRecognitionHarness.pressAndRelease()
+  microphoneRecognitionHarness.permissions.microphonePermission = .denied
+  microphoneRecognitionHarness.recognizer.complete(.success("late microphone recognition"))
+  check(
+    microphoneRecognitionHarness.inserter.insertCalls == 0
+      && microphoneRecognitionHarness.inserter.copyCalls == 0,
+    "microphone revocation before ASR delivery must not start a text effect"
+  )
+  check(
+    microphoneRecognitionHarness.outcomeObserver.outcomes.isEmpty,
+    "microphone revocation before ASR delivery has no history-eligible outcome"
+  )
+
+  let accessibilityHarness = Harness()
+  accessibilityHarness.pressAndRelease()
+  accessibilityHarness.permissions.accessibilityPermission = .denied
+  accessibilityHarness.recognizer.complete(.success("late Accessibility revocation"))
+  check(
+    accessibilityHarness.inserter.insertCalls == 0 && accessibilityHarness.inserter.copyCalls == 0,
+    "a direct session must discard instead of copying when Accessibility is revoked before ASR delivery"
+  )
+  check(
+    accessibilityHarness.outcomeObserver.outcomes.isEmpty,
+    "a discarded direct result never becomes a history-eligible outcome"
+  )
+
+  let microphoneHarness = Harness()
+  microphoneHarness.inserter.deferCompletion = true
+  microphoneHarness.pressAndRelease()
+  microphoneHarness.recognizer.complete(.success("late microphone revocation"))
+  check(
+    microphoneHarness.inserter.insertCalls == 1,
+    "the direct insertion starts while permission exists")
+  microphoneHarness.permissions.microphonePermission = .denied
+  microphoneHarness.inserter.completeDeferred(
+    .inserted(
+      InsertionReceipt(
+        targetProcessIdentifier: 100,
+        targetElementIdentifier: "body",
+        insertedText: "late microphone revocation",
+        method: "fake",
+        insertedAt: microphoneHarness.clock.now(),
+        expiresAt: microphoneHarness.clock.now().addingTimeInterval(120)
+      )
+    ))
+  check(
+    microphoneHarness.outcomeObserver.outcomes.isEmpty,
+    "a late insertion completion after microphone revocation must not publish an outcome"
+  )
+
+  let accessibilityCompletionHarness = Harness()
+  accessibilityCompletionHarness.inserter.deferCompletion = true
+  accessibilityCompletionHarness.pressAndRelease()
+  accessibilityCompletionHarness.recognizer.complete(.success("late Accessibility completion"))
+  check(
+    accessibilityCompletionHarness.inserter.insertCalls == 1,
+    "the direct insertion starts before Accessibility is revoked"
+  )
+  accessibilityCompletionHarness.permissions.accessibilityPermission = .denied
+  accessibilityCompletionHarness.inserter.completeDeferred(.unverified("late paste request"))
+  check(
+    accessibilityCompletionHarness.outcomeObserver.outcomes.isEmpty,
+    "a late insertion completion after Accessibility revocation must not publish an outcome"
+  )
+
+  let focusChangeHarness = Harness()
+  focusChangeHarness.inserter.deferCompletion = true
+  focusChangeHarness.pressAndRelease()
+  focusChangeHarness.focus.matchResult = .changed
+  focusChangeHarness.recognizer.complete(.success("direct fallback copy"))
+  check(
+    focusChangeHarness.inserter.copyCalls == 1, "focus change uses the direct session copy fallback"
+  )
+  check(
+    focusChangeHarness.inserter.copyRequiresAccessibility == [true],
+    "a direct-session copy fallback retains its Accessibility requirement"
+  )
+  focusChangeHarness.permissions.accessibilityPermission = .denied
+  focusChangeHarness.inserter.completeDeferred(.copied("late copy"))
+  check(
+    focusChangeHarness.outcomeObserver.outcomes.isEmpty,
+    "a direct fallback copy must discard if Accessibility is revoked before completion"
+  )
+
+  let copyOnlyHarness = Harness()
+  copyOnlyHarness.permissions.accessibilityPermission = .denied
+  copyOnlyHarness.pressAndRelease(shortcut: .copyOnlyControlShiftSpace)
+  copyOnlyHarness.recognizer.complete(.success("copy-only remains allowed"))
+  check(
+    copyOnlyHarness.inserter.copyCalls == 1,
+    "a copy-only session remains valid without Accessibility")
+  check(
+    copyOnlyHarness.inserter.copyRequiresAccessibility == [false],
+    "a copy-only session explicitly permits its Accessibility-free clipboard write"
+  )
+  check(
+    copyOnlyHarness.outcomeObserver.outcomes.count == 1,
+    "the valid copy-only result remains eligible for its explicit copied outcome"
+  )
+}
+
+private func testNaturalMicrophoneTestStopBlocksDictationUntilCompletion() {
+  let harness = Harness()
+  harness.audio.defersStopCompletion = true
+  _ = harness.coordinator.beginMicrophoneTest(
+    indicatorVisible: true,
+    onLevel: { _ in },
+    completion: { _ in }
+  )
+  harness.audio.completePendingStart()
+  harness.timers.fireAllTimers()
+
+  let startsBeforeHeldHotkey = harness.audio.calls.filter { $0 == "audio.start" }.count
+  harness.coordinator.hotkeyChanged(.function, isPressed: true)
+  check(
+    harness.audio.calls.filter { $0 == "audio.start" }.count == startsBeforeHeldHotkey,
+    "a natural microphone-test stop keeps the audio adapter exclusive until its queued completion"
+  )
+
+  harness.audio.completePendingStop()
+  harness.coordinator.hotkeyChanged(.function, isPressed: true)
+  check(
+    harness.audio.calls.filter { $0 == "audio.start" }.count == startsBeforeHeldHotkey + 1,
+    "dictation may start after the microphone-test stop finishes"
+  )
+  harness.coordinator.cancelFromHotkey()
+}
+
 private func testHotkeyRebindCancelsHeldSession() {
   let harness = Harness()
   harness.pressAndStart()
@@ -1332,6 +1472,8 @@ enum CoordinatorHarnessMain {
     testPracticeBindingIsLiveForEveryRetry()
     testReceiptEndsOnExpiryFocusChangeAndNewPress()
     testDirectSessionCancelsWhenAccessibilityIsRevoked()
+    testLatePermissionRevocationDiscardsWithoutOutcome()
+    testNaturalMicrophoneTestStopBlocksDictationUntilCompletion()
     testHotkeyRebindCancelsHeldSession()
     testClosingPracticeCancelsOnlyTheClaimedSession()
     testCommonModeTimerRunsDuringMenuTracking()

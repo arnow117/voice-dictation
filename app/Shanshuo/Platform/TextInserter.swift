@@ -29,7 +29,11 @@ protocol TextInserting: AnyObject {
   ) -> TextInsertionOperation
 
   @discardableResult
-  func copy(_ text: String, completion: @escaping (TextInsertionResult) -> Void)
+  func copy(
+    _ text: String,
+    requiresAccessibility: Bool,
+    completion: @escaping (TextInsertionResult) -> Void
+  )
     -> TextInsertionOperation
 }
 
@@ -118,9 +122,19 @@ final class SystemTextInserter: TextInserting, PerformanceSessionConfiguring {
       return operation
     }
 
+    guard permissionsAreStillAllowed(requiresAccessibility: true) else {
+      operation.complete(.discarded("权限已撤销，本次内容已丢弃"))
+      return operation
+    }
+
     let current = focusInspector.snapshot()
     guard directInsertionIsStillAllowed(expectedTarget, current: current) else {
-      copyOrDiscard(text, sessionID: sessionID, operation: operation)
+      copyOrDiscard(
+        text,
+        requiresAccessibility: true,
+        sessionID: sessionID,
+        operation: operation
+      )
       return operation
     }
 
@@ -154,6 +168,7 @@ final class SystemTextInserter: TextInserting, PerformanceSessionConfiguring {
     pasteAndRestore(
       text,
       expectedTarget: expectedTarget,
+      requiresAccessibility: true,
       sessionID: sessionID,
       operation: operation
     )
@@ -163,10 +178,16 @@ final class SystemTextInserter: TextInserting, PerformanceSessionConfiguring {
   @discardableResult
   func copy(
     _ text: String,
+    requiresAccessibility: Bool,
     completion: @escaping (TextInsertionResult) -> Void
   ) -> TextInsertionOperation {
     let operation = ManagedTextInsertionOperation(completion: completion)
-    copyOrDiscard(text, sessionID: performanceSessionID, operation: operation)
+    copyOrDiscard(
+      text,
+      requiresAccessibility: requiresAccessibility,
+      sessionID: performanceSessionID,
+      operation: operation
+    )
     return operation
   }
 
@@ -180,6 +201,10 @@ final class SystemTextInserter: TextInserting, PerformanceSessionConfiguring {
     guard operation.isActive else {
       return
     }
+    guard permissionsAreStillAllowed(requiresAccessibility: true) else {
+      operation.complete(.discarded("权限已撤销，本次内容已丢弃"))
+      return
+    }
     let writeResult = AXUIElementSetAttributeValue(
       element,
       kAXSelectedTextAttribute as CFString,
@@ -189,12 +214,17 @@ final class SystemTextInserter: TextInserting, PerformanceSessionConfiguring {
       pasteAndRestore(
         text,
         expectedTarget: target,
+        requiresAccessibility: true,
         sessionID: sessionID,
         operation: operation
       )
       return
     }
 
+    guard permissionsAreStillAllowed(requiresAccessibility: true) else {
+      operation.complete(.discarded("权限已撤销，本次内容已丢弃"))
+      return
+    }
     let readback =
       SystemFocusInspector.copyAttribute(element, kAXSelectedTextAttribute as String) as? String
     guard readback == text,
@@ -226,7 +256,7 @@ final class SystemTextInserter: TextInserting, PerformanceSessionConfiguring {
     _ expectedTarget: SystemFocusSnapshot,
     current: SystemFocusSnapshot
   ) -> Bool {
-    guard permissions.accessibilityPermission.isAuthorized else {
+    guard permissionsAreStillAllowed(requiresAccessibility: true) else {
       return false
     }
     guard !current.target.isSecure, !secureInputActive() else {
@@ -241,10 +271,15 @@ final class SystemTextInserter: TextInserting, PerformanceSessionConfiguring {
 
   private func copyOrDiscard(
     _ text: String,
+    requiresAccessibility: Bool,
     sessionID: UUID?,
     operation: ManagedTextInsertionOperation
   ) {
     guard operation.isActive else {
+      return
+    }
+    guard permissionsAreStillAllowed(requiresAccessibility: requiresAccessibility) else {
+      operation.complete(.discarded("权限已撤销，本次内容已丢弃"))
       return
     }
     let current = focusInspector.snapshot()
@@ -265,9 +300,17 @@ final class SystemTextInserter: TextInserting, PerformanceSessionConfiguring {
   private func pasteAndRestore(
     _ text: String,
     expectedTarget: SystemFocusSnapshot,
+    requiresAccessibility: Bool,
     sessionID: UUID?,
     operation: ManagedTextInsertionOperation
   ) {
+    guard operation.isActive else {
+      return
+    }
+    guard permissionsAreStillAllowed(requiresAccessibility: requiresAccessibility) else {
+      operation.complete(.discarded("权限已撤销，本次内容已丢弃"))
+      return
+    }
     let originalClipboard = clipboard.snapshot()
     var temporaryChangeCount: Int?
     let didWriteTemporaryText = clipboard.writeTemporaryText(
@@ -279,8 +322,15 @@ final class SystemTextInserter: TextInserting, PerformanceSessionConfiguring {
         guard temporaryChangeCount != nil else {
           return
         }
-        let callback = self.scheduler.schedule(after: 0) { [operation] in
+        let callback = self.scheduler.schedule(after: 0) { [weak self, operation] in
           guard operation.isActive, operation.didPostPaste else {
+            return
+          }
+          guard let self else {
+            return
+          }
+          guard self.permissionsAreStillAllowed(requiresAccessibility: requiresAccessibility) else {
+            operation.complete(.discarded("权限已撤销，本次内容已丢弃"))
             return
           }
           operation.complete(.unverified("已请求粘贴，无法验证插入结果"))
@@ -288,7 +338,12 @@ final class SystemTextInserter: TextInserting, PerformanceSessionConfiguring {
         operation.add(callback)
       })
     guard let ownedChangeCount = didWriteTemporaryText else {
-      copyOrDiscard(text, sessionID: sessionID, operation: operation)
+      copyOrDiscard(
+        text,
+        requiresAccessibility: requiresAccessibility,
+        sessionID: sessionID,
+        operation: operation
+      )
       return
     }
     temporaryChangeCount = ownedChangeCount
@@ -305,12 +360,21 @@ final class SystemTextInserter: TextInserting, PerformanceSessionConfiguring {
       guard let self, operation.isActive else {
         return
       }
+      guard self.permissionsAreStillAllowed(requiresAccessibility: requiresAccessibility) else {
+        operation.complete(.discarded("权限已撤销，本次内容已丢弃"))
+        return
+      }
       guard self.clipboard.changeCount == ownedChangeCount else {
         operation.complete(.unverified("剪贴板已由其他操作更新，未执行粘贴"))
         return
       }
       guard self.directInsertionIsStillAllowed(expectedTarget) else {
-        self.copyOrDiscard(text, sessionID: sessionID, operation: operation)
+        self.copyOrDiscard(
+          text,
+          requiresAccessibility: requiresAccessibility,
+          sessionID: sessionID,
+          operation: operation
+        )
         return
       }
       operation.didPostPaste = true
@@ -319,8 +383,12 @@ final class SystemTextInserter: TextInserting, PerformanceSessionConfiguring {
     }
     operation.add(pasteWork)
 
-    let fallbackWork = scheduler.schedule(after: 1) { [operation] in
-      guard operation.isActive else {
+    let fallbackWork = scheduler.schedule(after: 1) { [weak self, operation] in
+      guard let self, operation.isActive else {
+        return
+      }
+      guard self.permissionsAreStillAllowed(requiresAccessibility: requiresAccessibility) else {
+        operation.complete(.discarded("权限已撤销，本次内容已丢弃"))
         return
       }
       operation.complete(.unverified("无法确认插入结果，已恢复剪贴板"))
@@ -350,17 +418,34 @@ final class SystemTextInserter: TextInserting, PerformanceSessionConfiguring {
     operation: ManagedTextInsertionOperation
   ) {
     guard !text.contains("\n"), !text.contains("\r") else {
-      copyOrDiscard(text, sessionID: sessionID, operation: operation)
+      copyOrDiscard(
+        text,
+        requiresAccessibility: true,
+        sessionID: sessionID,
+        operation: operation
+      )
       return
     }
     guard directInsertionIsStillAllowed(expectedTarget), operation.isActive else {
-      copyOrDiscard(text, sessionID: sessionID, operation: operation)
+      copyOrDiscard(
+        text,
+        requiresAccessibility: true,
+        sessionID: sessionID,
+        operation: operation
+      )
       return
     }
 
     recordPerformanceEvent(kind: .unicodeRequested, result: .requested, sessionID: sessionID)
     eventPoster.postUnicode(text)
     operation.complete(.unverified("已发送文本，终端无法验证插入结果"))
+  }
+
+  private func permissionsAreStillAllowed(requiresAccessibility: Bool) -> Bool {
+    guard permissions.microphonePermission.isAuthorized else {
+      return false
+    }
+    return !requiresAccessibility || permissions.accessibilityPermission.isAuthorized
   }
 
   private func recordPerformanceEvent(
