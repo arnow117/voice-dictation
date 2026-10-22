@@ -3,11 +3,11 @@
 import PackageDescription
 
 let package = Package(
-    name: "ShanshuoCore",
-    platforms: [.macOS(.v14)],
-    products: [.library(name: "ShanshuoCore", targets: ["ShanshuoCore"])],
-    targets: [
-        .target(name: "ShanshuoCore"),
-        .testTarget(name: "ShanshuoCoreTests", dependencies: ["ShanshuoCore"]),
-    ]
+  name: "ShanshuoCore",
+  platforms: [.macOS(.v14)],
+  products: [.library(name: "ShanshuoCore", targets: ["ShanshuoCore"])],
+  targets: [
+    .target(name: "ShanshuoCore"),
+    .testTarget(name: "ShanshuoCoreTests", dependencies: ["ShanshuoCore"]),
+  ]
 )

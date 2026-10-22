@@ -54,9 +54,9 @@
             "T004"
           ],
           "id": "T005",
-          "status": "todo",
+          "status": "done",
           "title": "领域核心与规则迁移",
-          "updated_at": "2026-10-21T21:15:00+08:00"
+          "updated_at": "2026-10-22T04:17:56Z"
         },
         "T006": {
           "depends_on": [
@@ -64,9 +64,9 @@
             "T002"
           ],
           "id": "T006",
-          "status": "todo",
+          "status": "done",
           "title": "系统适配：权限、快捷键、焦点",
-          "updated_at": "2026-10-21T21:15:00+08:00"
+          "updated_at": "2026-10-22T04:17:56Z"
         },
         "T007": {
           "depends_on": [
@@ -74,9 +74,9 @@
             "T006"
           ],
           "id": "T007",
-          "status": "todo",
+          "status": "done",
           "title": "录音提示与音频采集",
-          "updated_at": "2026-10-21T21:15:00+08:00"
+          "updated_at": "2026-10-22T04:17:56Z"
         },
         "T008": {
           "depends_on": [
@@ -84,9 +84,9 @@
             "T001"
           ],
           "id": "T008",
-          "status": "in_progress",
+          "status": "done",
           "title": "识别引擎",
-          "updated_at": "2026-10-21T14:53:22Z"
+          "updated_at": "2026-10-22T04:17:56Z"
         },
         "T009": {
           "depends_on": [
@@ -94,9 +94,9 @@
             "T002"
           ],
           "id": "T009",
-          "status": "todo",
+          "status": "done",
           "title": "文本插入、插入回执与仅复制模式",
-          "updated_at": "2026-10-21T21:15:00+08:00"
+          "updated_at": "2026-10-22T04:17:56Z"
         },
         "T010": {
           "depends_on": [
@@ -107,9 +107,9 @@
             "T009"
           ],
           "id": "T010",
-          "status": "todo",
+          "status": "done",
           "title": "核心闭环集成",
-          "updated_at": "2026-10-21T21:15:00+08:00"
+          "updated_at": "2026-10-22T04:17:56Z"
         },
         "T011": {
           "depends_on": [
@@ -174,7 +174,7 @@
           "updated_at": "2026-10-21T21:15:00+08:00"
         }
       },
-      "updated_at": "2026-10-21T14:53:22Z",
+      "updated_at": "2026-10-22T04:17:56Z",
       "validation": {
         "at": null,
         "command": null,
@@ -195,7 +195,7 @@
       "product_context_ref": ".sdlc-v1/context/REQ-001.product.md",
       "status": "in_delivery",
       "title": "按住快捷键语音输入核心闭环",
-      "updated_at": "2026-10-21T14:53:22Z"
+      "updated_at": "2026-10-22T04:17:56Z"
     },
     "REQ-002": {
       "created_at": "2026-10-21T11:25:28Z",

@@ -8,6 +8,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 COMMON="$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir)"
 MAIN="$(dirname "$COMMON")"
 WORK="$MAIN/.work"
+export CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-$WORK/clang-module-cache}"
+mkdir -p "$CLANG_MODULE_CACHE_PATH"
 
 echo "== unit tests (Packages/ShanshuoCore)"
 swift test --package-path "$ROOT/Packages/ShanshuoCore" --scratch-path "$WORK/spm/core" --disable-sandbox 2>&1 \
@@ -17,10 +19,20 @@ swift test --package-path "$ROOT/Packages/ShanshuoCore" --scratch-path "$WORK/sp
 echo "== build"
 bash "$ROOT/scripts/build.sh"
 
+echo "== coordinator harness"
+bash "$ROOT/tests/integration/run_coordinator_harness.sh"
+
+echo "== text inserter harness"
+bash "$ROOT/tests/integration/run_text_inserter_harness.sh"
+
 if [ "${SKIP_ASR:-0}" != 1 ]; then
   echo "== ASR smoke (app --transcribe, model $WORK/models/qwen3-asr-0.6b-int8)"
   SHANSHUO_MODEL_DIR="$WORK/models/qwen3-asr-0.6b-int8" UV_CACHE_DIR="${UV_CACHE_DIR:-$HOME/.cache/uv}" \
     uv run --project "$ROOT/bench/asr" python "$ROOT/tests/integration/asr_smoke.py" \
+    "$WORK/build/Shanshuo.app/Contents/MacOS/Shanshuo" "$WORK/bench-data/clips"
+  echo "== ASR bounded chunk runtime"
+  SHANSHUO_MODEL_DIR="$WORK/models/qwen3-asr-0.6b-int8" \
+    python3 "$ROOT/tests/integration/asr_chunking_runtime.py" \
     "$WORK/build/Shanshuo.app/Contents/MacOS/Shanshuo" "$WORK/bench-data/clips"
 fi
 echo "== all checks passed"

@@ -18,10 +18,11 @@ OBJ="$OUT/obj"
 APP="$OUT/Shanshuo.app"
 STAGE="$OUT/.stage/Shanshuo.app"
 DEV_MODEL_DIR=""
+export CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-$MAIN/.work/clang-module-cache}"
 [ "$CONFIG" = dev ] && DEV_MODEL_DIR="$MAIN/.work/models/qwen3-asr-0.6b-int8"
 
 SHANSHUO_VENDOR_CACHE="${SHANSHUO_VENDOR_CACHE:-$MAIN/.work/vendor}" bash "$ROOT/scripts/fetch-vendor.sh" >/dev/null
-mkdir -p "$OBJ" "$OUT/.mc"
+mkdir -p "$OBJ" "$OUT/.mc" "$CLANG_MODULE_CACHE_PATH"
 
 # 1. Domain core as a static library module (same sources as Packages/ShanshuoCore, tested by `swift test`).
 swiftc -O -swift-version 6 -target $TARGET -module-cache-path "$OUT/.mc" -parse-as-library \

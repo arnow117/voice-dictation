@@ -32,7 +32,7 @@ def main():
     by_file = {r["file"][:-4]: r for r in rows if "file" in r}
     failed = False
     if out.returncode != 0 or len(by_file) != len(ids):
-        print(f"FAIL: exit {out.returncode}, {len(by_file)}/{len(ids)} results\n{out.stdout[-2000:]}")
+        print(f"FAIL: exit {out.returncode}, {len(by_file)}/{len(ids)} results")
         sys.exit(1)
     for cat, cids in CLIPS.items():
         hyps = [by_file[i]["text"] for i in cids]
