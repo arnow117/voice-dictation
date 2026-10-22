@@ -494,3 +494,9 @@ worker 返回 `20261022-165625`，生产 `ApplicationMainMenu` 增加 nil-target
 另外，实际 CLI process selector 暴露大小写身份问题：Swift UUID.uuidString 为大写、CLI 参数先转小写，原字串比较导致合法生产日志选择为空。worker 在 validated reader 的副本和 selector 边界统一 canonical UUID，原日志不变；11 项 metrics 回归包含真实 Swift 大写编码和大小写 process/session 选择。主 Agent 使用先前失败的同一大写 process UUID 重跑，exit 0、选中 93 个有效事件、invalid=0。未知字段、非法 UUID、失败与缺失样本仍拒绝或保留分母。
 
 用户另明确授权本次验证临时开启系统辅助功能键盘与旁白，并在结束后恢复原状态。辅助功能键盘开关由 off→on，经 CUA 和只读进程信息确认已开启，但工具只读到空面板，不能可靠操作按键；已在系统确认弹窗选择关闭，并实际读到开关 off。全键盘控制、粘滞键、慢速键始终 off。此探索没有产出自动全局按键通过证据。旁白尚未开启或验证，后续仍按授权单独执行并恢复。
+
+### T015 真实练习通过与新构建冷启动失败（2026-10-22）
+
+用户在 `165625` 实际说公开测试句，确认文字出现且继续按钮可用；生产诊断记录本次 2.285 秒采集、binding 接受、paste observed、outcome target matched 和最终 practice_validation_verified。该 session 在历史中 count=0。引导持久化状态随后八步全部 completed、skipped 为空。完成后的两次 CUA 超时，经过一次最多两分钟、仅本任务 PID 的只读辨别：1 秒 sample 主线程在正常 NSApplication 事件等待，CPU0%，系统设置 CUA 正常且引导已完成，支持窗口关闭解释；未盲目改代码或重启。见 `docs/validation/native-system-165625.md`。
+
+同一新进程真实启动到 ready 为 5.500070708 秒，超过 NFR-006 的 5 秒；旧 `145800` 三次达标不能覆盖它，也未改为平均值通过。新构建及最终发布配置的冷启动仍未通过。其余八应用矩阵、性能与系统质量条件未完成，T015 继续 in_progress。
