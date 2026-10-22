@@ -504,3 +504,5 @@ worker 返回 `20261022-165625`，生产 `ApplicationMainMenu` 增加 nil-target
 ### T015 设置页与辅助功能的后续真机证据（2026-10-22）
 
 用户打开设置后，CUA 经实际应用菜单取得 `165625` 设置控件及可访问名称。系统“键盘导航”读取为 on，未修改；系统设置的 Tab 对照能把焦点移到搜索框，闪说设置经过 Raise 和标题栏点击后 Tab 仍报告窗口焦点，尚未确定是应用键视图顺序还是工具输入路径，未按猜测改代码或记为通过。已按用户授权临时开启旁白，实际开关 off→on；连接 VoiceOver 的 CUA 调用超时，未得到朗读或操作证据。随后从仍可用的系统设置关闭，实际确认 off。辅助功能键盘此前也已恢复 off。详见 `docs/validation/native-system-165625.md`；键盘与旁白 NFR 仍未通过，T015 未推进。
+
+一次独立只读复核未找到可确认的设置页焦点根因：Apple 的默认 key-view loop 与隐藏视图跳过规则，不能支持“缺少显式 initialFirstResponder/nextKeyView 就必然失败”的推断；既有窗口 harness 也只验证布局。主 Agent 保留未通过状态，没有据此修改焦点代码；已请求用户实际按 Tab/Shift-Tab，区分工具焦点报告与真实操作结果。该复核不是最终 lifecycle review。
