@@ -1,6 +1,6 @@
 # 安装闪说测试版
 
-现有公开发布版本是 `v0.1.0-beta.1`；`v0.1.0-beta.2` 是尚待本机验证的本地候选。两者均面向 Apple silicon（arm64）和 macOS 14 及以上，安装包不含语音模型；首次使用时由应用下载并校验 Qwen3-ASR 0.6B（INT8）。候选使用项目测试签名，未经过 Apple 公证。
+`v0.1.0-beta.1` 与 `v0.1.0-beta.2` 均面向 Apple silicon（arm64）和 macOS 14 及以上，安装包不含语音模型；首次使用时由应用下载并校验 Qwen3-ASR 0.6B（INT8）。具体可下载版本以项目 [Release 页面](https://github.com/arnow117/voice-dictation/releases) 为准。测试包使用项目测试签名，未经过 Apple 公证。
 
 1. 下载 ZIP 或 DMG，并用同目录的 `SHA256SUMS.txt` 核对文件校验和。
 2. 解压 ZIP，或打开 DMG 后把 `Shanshuo.app` 拖到 `Applications`。DMG 内的 `Applications` 是快捷方式。
@@ -20,6 +20,6 @@
 
 按 Esc、进入安全输入框、锁屏、暂停或撤销本次会话所需权限时，整次听写会被丢弃：不会插入、复制或写历史。历史开启时可分别查看和复制识别原文与整理文本。
 
-验证人员可使用稳定测试签名的候选执行 `Shanshuo --formatting-public-eval --out <result.jsonl>`。该命令只读取 checkout 中的公开 60 条夹具，既不接受 Key 参数，也不接受任意听写文本；它会显式只读一次当前用户的 CC Switch 配置，并只在该命令进程内保留凭据。它不读取系统钥匙串，也不复用其他进程的配置。v2 的唯一正式批次仍为 PARTIAL，详情见 [智能整理 v2 评测记录](validation/minimax-formatting-v2.md)；候选不代表质量或延迟验收通过。
+验证人员可使用稳定测试签名的 beta.2 应用执行 `Shanshuo --formatting-public-eval --out <result.jsonl>`。该命令只读取 checkout 中的公开 60 条夹具，既不接受 Key 参数，也不接受任意听写文本；它会显式只读一次当前用户的 CC Switch 配置，并只在该命令进程内保留凭据。它不读取系统钥匙串，也不复用其他进程的配置。v2 的唯一正式批次仍为 PARTIAL，详情见 [智能整理 v2 评测记录](validation/minimax-formatting-v2.md)；beta.2 不代表质量或延迟验收通过。
 
 本测试版尚有准确率、冷启动、辅助功能和应用兼容性限制，安装前请阅读 [已知问题](known-issues.md)。完整 ASR 准确率事实见 [ASR 验证报告](validation/asr-rms-fix-125650.md)。

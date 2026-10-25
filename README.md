@@ -1,6 +1,6 @@
 # 闪说
 
-macOS 桌面端语音输入：在任意应用中按住快捷键说话，松开后由本地模型识别中英文，并安全地插入或复制到当前输入框。`v0.1.0-beta.2` 本地候选还提供默认关闭、需知情开启的 MiniMax 智能整理；个人词典仍属于后续 REQ-003。
+macOS 桌面端语音输入：在任意应用中按住快捷键说话，松开后由本地模型识别中英文，并安全地插入或复制到当前输入框。`v0.1.0-beta.2` 测试版还提供默认关闭、需知情开启的 MiniMax 智能整理；个人词典仍属于后续 REQ-003。
 
 ## 需求
 
@@ -35,9 +35,9 @@ macOS 桌面端语音输入：在任意应用中按住快捷键说话，松开�
 
 ## 安装测试版
 
-公开可下载版本仍是 `v0.1.0-beta.1`，提供 arm64 的 ZIP、DMG 和 `SHA256SUMS.txt`；应用版本为 `0.1.0`。下载见 [测试版发布页](https://github.com/arnow117/voice-dictation/releases/tag/v0.1.0-beta.1)。`v0.1.0-beta.2` 是独立的本地候选，使用同一 marketing version、构建版本 `1.0.3`，尚未创建公开 Release，也不覆盖 beta.1 资产。候选使用项目测试签名，未经过 Apple 公证，首次打开可能需要在 macOS“隐私与安全性”中明确允许。安装步骤、权限说明和模型下载行为见 [安装说明](docs/install.md)，未完成验证与质量限制见 [已知问题](docs/known-issues.md)。
+发布页按 tag 提供 arm64 的 ZIP、DMG 和 `SHA256SUMS.txt`；具体可下载版本以 [测试版发布页](https://github.com/arnow117/voice-dictation/releases) 为准。`v0.1.0-beta.2` 使用同一 marketing version、构建版本 `1.0.3`，并保留 beta.1 的资产。测试包使用项目测试签名，未经过 Apple 公证，首次打开可能需要在 macOS“隐私与安全性”中明确允许。安装步骤、权限说明和模型下载行为见 [安装说明](docs/install.md)，未完成验证与质量限制见 [已知问题](docs/known-issues.md)。
 
-beta.1 只含 REQ-001 的本地听写；beta.2 候选接入了 REQ-002 的可选 MiniMax 整理。个人词典尚未接入。
+beta.1 只含 REQ-001 的本地听写；beta.2 接入了 REQ-002 的可选 MiniMax 整理。个人词典尚未接入。
 
 已确认的兼容性限制：本安装版在备忘录可正常听写输入；Codex 聊天输入框尚不能自动写入，可先在备忘录听写后手动复制。完整矩阵和后续项见已知问题清单。
 

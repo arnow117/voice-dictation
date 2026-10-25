@@ -128,7 +128,15 @@
 - **最小修复**：仅允许 `tests/integration/measure_e2e_test.py` 把固定100ms等待替换为有期限的明确读取器就绪同步；可用测试专属包装/注入钩子，保持真实 `measure.py` 播放器成功、非零退出、缺少player的断言，不延长sleep掩盖竞态。不修改应用、ASR、MiniMax、已冻结数据或 production measure.py 的事件语义。
 - **验证与边界**：同一worker实施一次有证据的局部修复，运行受影响测量测试与一次完整SKIP_ASR回归（既有loopback可完整执行上下文）。不得重建已安装候选、再请求provider或改系统安全设置。若再出现同段不收敛，保留证据并报告，不再启动第二次主诊断。
 
+##### 决定 8：完成本次已授权的 PR、main 合并与 beta.2 发布
+
+- **授权**：2026-10-25 用户明确要求 PR 在检查通过后合并到 main 并发布 beta.2。保留 DEC-013 默认关闭实验交付及质量/速度限制，Issue2 保持跟踪正式目标。闪说已经按用户要求退出；本轮不为打包、CLI或验证重新启动GUI、录音或读取MiniMax系统钥匙串。
+- **实现版本与产物**：当前功能分支 `dca88c907a99daac1ce4d402656c03a7f4bbedb3`。只收尾 T003 的分发文档、版本状态与完整 ZIP/DMG/SHA；复用已实际使用过的签名 app（build1.0.3，时间2026-10-23T08:09:19Z，binarySHA aad379630f54d143c27afec620094d21883e6c185f026d7b43b3e20e0a8a2d71），不重编译或访问签名私钥。独立验证需核对复用产物与当前应用源码适用性；有差异时返回明确缺口。
+- **恢复与分工**：原实现worker在运行时中断后已不存在，已只读核对Git、状态和遗留日志。允许一个替代Terra worker仅完成已稳定依赖下可独立验收的T003打包/文档收尾；保留所有失败史、一次诊断已用及v2不再调参/重跑限制。完成后主Agent验收Task，继而独立验证、独立评审、发布准备与主Agent执行外部副作用。
+- **本轮检查**：已有最终SKIP_ASR完整日志到all checks passed；不因两天经过而无谓重跑云端模型或120条ASR。当前未修改的确定性证据可复用；新的分发文档、归档、签名及校验和需要验证。独立验证和评审检查实际业务commit，发布后匿名下载资产核对SHA。无CI时明确为本机检查，不伪报GitHub Actions通过。
+
 #### 数据模型 / 关键实体
+
 
 | 实体 | 字段或所有权 | 约束 | 覆盖 |
 |---|---|---|---|
@@ -422,3 +430,10 @@ T001 → T002 → T003；首个可开始的是T001。稳定formatter接口先行
 - 已核对局部测试修复：以首次 baseline 读取后的有界就绪同步替换固定100ms等待，启动等待上限5秒，测量和播放器期限保持2秒，未修改 production `measure.py` 或已安装应用。保留原两次失败和一次诊断记录。
 - 中断前留下的 `.work/minimax/t003-measure-e2e-final.log` 显示 `measure e2e test passed`；`.work/minimax/t003-full-regression-final.log` 包含完整后续 harness，通过至 `== all checks passed`。恢复时不重新运行云端评测，原质量/速度 PARTIAL 结果及用户接受实验交付的决定保持。
 - 本次提交是保存当前实验功能实现、必要测试与文档的功能分支提交；T003/最终独立验证评审尚未登记完成，不因此宣布正式指标通过、main 合并或新公开 Release。新的文档同步归档只留下 ZIP 中间产物，完整旧 v2 ZIP/DMG 仍按先前证据保留。
+
+### T003 beta.2 分发归档收尾（2026-10-25）
+
+- 复用 `.work/minimax/t003-v2-dist/.staging/build/Shanshuo.app`，没有重编译、重新签名、启动 GUI、读取 MiniMax 系统钥匙串或发出 provider 请求。它与已测试的 `/Applications/Shanshuo.app` 具有相同的可执行文件 SHA-256 `aad379630f54d143c27afec620094d21883e6c185f026d7b43b3e20e0a8a2d71`；Info.plist 为 `0.1.0/1.0.3`、`2026-10-23T08:09:19Z`。
+- 通过 `SOURCE_APP=... DIST_DIR="$PWD/.work/minimax/beta2-release" bash scripts/release/create_beta.sh` 生成新的归档，完整证书信任上下文 exit 0；ZIP `1e0d889515c469cf9e356a21842817799eef622c8bfb81cc4e317cfc33c1fec0`，DMG `ccdf83c6ca644ef6be223e56723edc7641fb07026f9039dc4fe735302068050a`。校验和、ZIP/DMG 包内文档链接、`Applications` 链接、arm64、签名和依赖检查均通过。
+- 当前分发说明明确 beta.2 的默认关闭实验状态、v2 PARTIAL 指标、一次实际 GUI 导入/连接/开启和备忘录 Fn 流程证据，且以 Release 页面确定公开下载状态。冻结的规则、fixture、rubric 和 scorer SHA-256 仍与 v2 记录一致。
+- 归档可证明复用的二进制与已测试安装副本相同，并且 bundle 含当前功能的静态 MiniMax/CC Switch 字符串；bundle 未嵌入 Git revision，因而不能仅凭归档加密证明该可执行文件由 `dca88c9` 的完整源码编译。独立验证应将此作为 source-to-binary 追溯缺口处理，而不将其表述为重新构建证明。

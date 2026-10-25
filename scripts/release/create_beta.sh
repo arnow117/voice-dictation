@@ -6,6 +6,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 VERSION="v0.1.0-beta.2"
 ASSET_PREFIX="Shanshuo-${VERSION}-macos-arm64"
 DIST_DIRECTORY="${DIST_DIR:-$ROOT/.work/dist/$VERSION}"
+SOURCE_APP="${SOURCE_APP:-}"
 STAGING_DIRECTORY="$DIST_DIRECTORY/.staging"
 BUILD_DIRECTORY="$STAGING_DIRECTORY/build"
 ZIP_ROOT="$STAGING_DIRECTORY/Shanshuo-$VERSION"
@@ -62,7 +63,16 @@ rm -rf "$STAGING_DIRECTORY"
 rm -f "$ZIP_PATH" "$DMG_PATH" "$CHECKSUM_PATH"
 mkdir -p "$BUILD_DIRECTORY" "$ZIP_ROOT" "$DMG_ROOT"
 
-CONFIG=release OUT_DIR="$BUILD_DIRECTORY" bash "$ROOT/scripts/build.sh"
+if [ -n "$SOURCE_APP" ]; then
+  [ -d "$SOURCE_APP" ] || {
+    echo "SOURCE_APP is not an app bundle: $SOURCE_APP" >&2
+    exit 2
+  }
+  ditto "$SOURCE_APP" "$BUILD_DIRECTORY/Shanshuo.app"
+else
+  CONFIG=release OUT_DIR="$BUILD_DIRECTORY" bash "$ROOT/scripts/build.sh"
+fi
+
 REQUIRE_RELEASE_SIGNING=1 bash "$ROOT/scripts/release/verify_bundle.sh" \
   "$BUILD_DIRECTORY/Shanshuo.app"
 
