@@ -452,6 +452,14 @@ T001 → T002 → T003；首个可开始的是T001。稳定formatter接口先行
 - **待主 Agent 执行的公开步骤与 smoke**：提交发布记录后，完成 PR 检查和 main 合并，创建并发布 `v0.1.0-beta.2`，只附 ZIP、DMG 和 `SHA256SUMS.txt`。随后以匿名下载逐个比对上述 SHA-256，并核对 Release 名称、tag、三项资产和限制说明；只读获取公开元数据和文件，不启动、安装或操作应用。`record-release` 只能在这些事实都成功后由主 Agent 以验证实现版本 `7e3d7af3a85504fe39e2371b7b4f227c43cbecb8` 记录。
 - **观察边界**：产品观察计划仍引用 REQ-002 的“发布后观察计划”；Issue #2 继续承载正式质量/速度目标。技术信号位于公开 Release 元数据、匿名下载哈希和发布后反馈事实；当前没有遥测或 hosted health signal。下次技术检查为主 Agent 提供公开资产、tag 与下载结果后立即进行本 task 的 Phase 2，并如实记录其技术缺口。
 
+### beta.2 已公开发布与 smoke（Phase 2，2026-10-25）
+
+- **实际发布**：PR #5 于 `2026-10-25T03:19:00Z` 合并，merge commit 为 `ea3bc6d2f0c004b2221689f4b38873e467ce6881`。公开 Release `v0.1.0-beta.2`（ID `423122182`）于 `2026-10-25T03:20:10Z` 发布，`draft=false`、`prerelease=true`，其公开 tag 指向该 merge commit。验证实现 `7e3d7af3a85504fe39e2371b7b4f227c43cbecb8` 到 merge commit 的业务文件差异为空，因此保留其验证归因；生命周期 release commit 不使用 merge/tag SHA。
+- **公开 smoke**：无认证下载的 `SHA256SUMS.txt`、ZIP 和 DMG 均成功；manifest checksum 检查通过。三个下载文件逐字节等于已验证本地产物，SHA-256 分别为 `eede8eccd68b59f082ac1c204398923f4f8f3bf0e61f83dc25c6ac33747cb45d`、`cab6cf2b7cb98724c66ee35ae3cb3c2bb5cded4e3f5fa72e36de670a2615322d`、`07868a4782efc368dad7fdabe0fcadc70e18ba826294e282716f4dae83cdd8f1`；Release 元数据的名称、大小和 digest 一致。因此复用相同字节的已通过签名/归档验证，不重复挂载或执行 bundle 检查。
+- **beta.1 与回滚状态**：`.work/minimax/beta1-before-beta2.json` 和 `beta1-after-beta2.json` 完全相等，既有 beta.1 tag、资产 id、名称、大小、digest 和发布时间均未改变。发布后没有触发回滚；若之后发现公开资产或元数据不符，仍停止扩散、以默认关闭回到本地路径或恢复 beta.1，不删除用户数据、配置或凭据。
+- **技术观察与缺口**：主 Agent 的只读进程检查显示 Shanshuo 仍退出；本阶段未启动、安装或操作应用。公开下载与元数据是发布 smoke，不是运行时质量、延迟或真实用户使用观测；冻结 EVAL 和历史 `1.0.3` 人工旅程也不被表述为发布后的 live 观测。产品观察继续引用 REQ-002 的“发布后观察计划”；没有 runtime telemetry、hosted health 或自动监控。下一次人工技术检查目标为 `2026-11-06`，或 Issue #2 出现可操作失败反馈时提前；未创建自动化。正式质量和速度目标仍在 open Issue #2。
+- **生命周期请求**：公开目标、资产、tag、beta.1 保留与 smoke 均已满足，主 Agent 可执行 `record-release --feature-id FEAT-002 --commit 7e3d7af3a85504fe39e2371b7b4f227c43cbecb8 --at 2026-10-25T03:20:10Z`。
+
 ## 独立评审与处理（2026-10-25）
 
 - 独立 Sol reviewer 对 `3f9560f` 评审要求修改一项 P2：已开启状态允许重新测试，`beginConnectionTest` 保留 enabled=true；普通失败提示却声称“智能整理仍保持关闭”。根因在设置反馈没有按当前配置区分状态，可能使用户误判后续文字发送行为。原生窗口测试未覆盖已开启后的超时/断网复测。
