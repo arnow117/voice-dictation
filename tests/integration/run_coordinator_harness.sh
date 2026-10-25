@@ -18,6 +18,7 @@ swiftc -swift-version 5 -target arm64-apple-macos14.0 -module-cache-path "$WORK/
   "$ROOT/app/Shanshuo/Performance/PerformanceDiagnostics.swift" \
   "$ROOT/app/Shanshuo/Platform/HotkeyConfiguration.swift" \
   "$ROOT/app/Shanshuo/Platform/TextInsertionOperation.swift" \
+  "$ROOT/app/Shanshuo/Formatting/FormattingService.swift" \
   "$ROOT/app/Shanshuo/Coordinator/DictationCoordinator.swift" \
   "$ROOT/tests/integration/coordinator_harness.swift" \
   -o "$OUT"

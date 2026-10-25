@@ -49,13 +49,14 @@ private func wait<Value>(
 private func outcome(
   sessionID: UUID = UUID(),
   text: String,
+  finalText: String? = nil,
   delivery: SessionOutcome.Delivery = .inserted,
   createdAt: Date
 ) -> SessionOutcome {
   SessionOutcome(
     sessionID: sessionID,
     recognizedText: text,
-    finalText: text,
+    finalText: finalText ?? text,
     delivery: delivery,
     target: TargetSnapshot(
       bundleIdentifier: "com.example.Target",
@@ -96,7 +97,11 @@ enum HistoryStoreHarness {
     let originalText = "quote ' ; DROP TABLE history; --"
 
     check(wait(store.open).isSuccess, "history database opens")
-    let first = outcome(text: originalText, createdAt: clock.date)
+    let first = outcome(
+      text: originalText,
+      finalText: "quoted text, formatted.",
+      createdAt: clock.date
+    )
     let inserted = wait { completion in
       store.append(first, targetAppName: "Target", writeGeneration: 0, completion: completion)
     }
@@ -120,7 +125,10 @@ enum HistoryStoreHarness {
       exit(1)
     }
     check(records.count == 3, "parameter-bound text and delivery states are retained")
-    check(records.contains { $0.finalText == originalText }, "quoted text cannot alter the query")
+    check(
+      records.contains { $0.recognizedText == originalText && $0.finalText == "quoted text, formatted." },
+      "original and final text remain separate through persistence"
+    )
     check(records.contains { $0.delivery == .copied }, "copied outcomes are marked")
     check(records.contains { $0.delivery == .unverified }, "unverified outcomes are marked")
 

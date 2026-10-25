@@ -151,6 +151,7 @@ private final class FakeIndicator: RecordingIndicating {
   var isAvailable = true
   var recordingVisible = true
   var calls: [String] = []
+  var messages: [String] = []
 
   func showRecording() -> Bool {
     calls.append("indicator.recording")
@@ -159,7 +160,10 @@ private final class FakeIndicator: RecordingIndicating {
 
   func updateRecording(level: Float, elapsed: TimeInterval, countdown: Int?) {}
   func showProcessing() { calls.append("indicator.processing") }
-  func showMessage(_ message: String, hideAfter: TimeInterval) { calls.append("indicator.message") }
+  func showMessage(_ message: String, hideAfter: TimeInterval) {
+    calls.append("indicator.message")
+    messages.append(message)
+  }
   func showCopyOnlyResult(_ message: String) { calls.append("indicator.copy-only") }
   func showBusyFeedback() { calls.append("indicator.busy") }
   func hide() { calls.append("indicator.hide") }
@@ -341,9 +345,58 @@ private final class FakeInsertionOperation: TextInsertionOperation {
   }
 }
 
+private final class FakeFormattingOperation: FormattingOperation {
+  private(set) var isCancelled = false
+
+  func cancel() {
+    isCancelled = true
+  }
+}
+
+private final class FakeFormatter: FormattingServicing {
+  private(set) var requests: [FormattingRequest] = []
+  private(set) var operation: FakeFormattingOperation?
+  private(set) var authorizationWasDenied = false
+  var synchronousResult: FormattingResult?
+  private var authorizeSend: (() -> Bool)?
+  private var completion: ((FormattingResult) -> Void)?
+
+  @discardableResult
+  func format(
+    request: FormattingRequest,
+    configuration: FormattingConfigurationSnapshot,
+    authorizeSend: @escaping () -> Bool,
+    completion: @escaping (FormattingResult) -> Void
+  ) -> FormattingOperation {
+    requests.append(request)
+    let operation = FakeFormattingOperation()
+    self.operation = operation
+    self.authorizeSend = authorizeSend
+    self.completion = completion
+    if let synchronousResult {
+      deliver(synchronousResult)
+    }
+    return operation
+  }
+
+  func deliver(_ result: FormattingResult) {
+    guard authorizeSend?() == true else {
+      authorizationWasDenied = true
+      return
+    }
+    completion?(result)
+  }
+
+  func forceDeliver(_ result: FormattingResult) {
+    completion?(result)
+  }
+}
+
 private final class FakeInserter: TextInserting {
   var insertCalls = 0
   var copyCalls = 0
+  private(set) var insertedTexts: [String] = []
+  private(set) var copiedTexts: [String] = []
   private(set) var copyRequiresAccessibility: [Bool] = []
   var deferCompletion = false
   private let clock: DictationClock
@@ -361,6 +414,7 @@ private final class FakeInserter: TextInserting {
     completion: @escaping (TextInsertionResult) -> Void
   ) -> TextInsertionOperation {
     insertCalls += 1
+    insertedTexts.append(text)
     let operation = FakeInsertionOperation()
     latestOperation = operation
     if deferCompletion {
@@ -380,6 +434,7 @@ private final class FakeInserter: TextInserting {
     -> TextInsertionOperation
   {
     copyCalls += 1
+    copiedTexts.append(text)
     copyRequiresAccessibility.append(requiresAccessibility)
     let operation = FakeInsertionOperation()
     latestOperation = operation
@@ -529,6 +584,7 @@ private struct Harness {
   let audio: FakeAudio
   let recognizer: FakeRecognizer
   let inserter: FakeInserter
+  let formatter: FakeFormatter
   let hotkeys: FakeHotkeys
   let clock: ManualClock
   let timers: ManualTimerScheduler
@@ -537,7 +593,7 @@ private struct Harness {
   let performanceRecorder: FakePerformanceRecorder
   let coordinator: DictationCoordinator
 
-  init() {
+  init(formattingEnabled: Bool = false, synchronousFormatting: FormattingResult? = nil) {
     let target = TargetSnapshot(
       bundleIdentifier: "com.apple.Notes",
       processIdentifier: 100,
@@ -553,6 +609,8 @@ private struct Harness {
     clock = ManualClock()
     recognizer = FakeRecognizer()
     inserter = FakeInserter(clock: clock)
+    formatter = FakeFormatter()
+    formatter.synchronousResult = synchronousFormatting
     timers = ManualTimerScheduler()
     receiptEndObserver = ReceiptEndObserver()
     outcomeObserver = OutcomeObserver()
@@ -565,6 +623,18 @@ private struct Harness {
       recognizer: recognizer,
       textInserter: inserter,
       hotkeys: hotkeys,
+      formatter: formatter,
+      formattingConfiguration: FormattingConfigurationSnapshot(
+        enabled: formattingEnabled,
+        model: .flash,
+        endpoint: .domestic,
+        credential: formattingEnabled
+          ? FormattingCredentialDescriptor(reference: "test-key", hint: "••••test")
+          : nil,
+        consentVersion: formattingEnabled ? 1 : nil,
+        revision: 1,
+        testGeneration: 0
+      ),
       clock: clock,
       timerScheduler: timers,
       performanceDiagnostics: performanceRecorder,
@@ -920,6 +990,289 @@ private func testFocusChangeAndNoSpeech() {
   check(
     silenceHarness.inserter.insertCalls == 0 && silenceHarness.inserter.copyCalls == 0,
     "no speech never writes"
+  )
+}
+
+private func testFormattingSessionOwnershipAndFallbacks() {
+  let localAtPressHarness = Harness()
+  localAtPressHarness.pressAndRelease()
+  localAtPressHarness.coordinator.updateFormattingConfiguration(
+    FormattingConfigurationSnapshot(
+      enabled: true,
+      model: .flash,
+      endpoint: .domestic,
+      credential: FormattingCredentialDescriptor(reference: "new-key", hint: "••••new"),
+      consentVersion: 1,
+      revision: 2,
+      testGeneration: 0
+    )
+  )
+  localAtPressHarness.recognizer.complete(.success("local at press"))
+  check(
+    localAtPressHarness.formatter.requests.isEmpty,
+    "a session that was local at press does not send after formatting is enabled"
+  )
+  check(
+    localAtPressHarness.inserter.insertedTexts == ["local at press"],
+    "a session that was local at press delivers its original text"
+  )
+
+  let successHarness = Harness(formattingEnabled: true)
+  successHarness.pressAndRelease()
+  successHarness.recognizer.complete(.success("第一买牛奶"))
+  check(successHarness.coordinator.phase == .formatting, "formatting is an explicit session phase")
+  check(
+    successHarness.formatter.requests.first?.dictionaryTerms.isEmpty == true,
+    "the coordinator sends no dictionary terms before REQ-003"
+  )
+  successHarness.formatter.deliver(.formatted("1. 买牛奶"))
+  check(successHarness.inserter.insertedTexts == ["1. 买牛奶"], "formatted text is delivered")
+  check(
+    successHarness.outcomeObserver.outcomes.first?.recognizedText == "第一买牛奶"
+      && successHarness.outcomeObserver.outcomes.first?.finalText == "1. 买牛奶",
+    "one outcome keeps original and formatted text separately"
+  )
+
+  let synchronousHarness = Harness(
+    formattingEnabled: true,
+    synchronousFormatting: .formatted("同步整理文本")
+  )
+  synchronousHarness.pressAndRelease()
+  synchronousHarness.recognizer.complete(.success("同步原文"))
+  check(
+    synchronousHarness.inserter.insertedTexts == ["同步整理文本"],
+    "a synchronous formatter completion is adopted exactly once"
+  )
+
+  let configurationChangeHarness = Harness(formattingEnabled: true)
+  configurationChangeHarness.pressAndRelease()
+  configurationChangeHarness.recognizer.complete(.success("配置变更原文"))
+  configurationChangeHarness.coordinator.updateFormattingConfiguration(
+    FormattingConfigurationSnapshot(
+      enabled: false,
+      model: .flash,
+      endpoint: .domestic,
+      credential: nil,
+      consentVersion: nil,
+      revision: 2,
+      testGeneration: 1
+    )
+  )
+  check(
+    configurationChangeHarness.formatter.operation?.isCancelled == true,
+    "a changed formatting revision cancels the previous formatter operation"
+  )
+  check(
+    configurationChangeHarness.inserter.insertedTexts == ["配置变更原文"],
+    "a changed formatting revision falls back to the original exactly once"
+  )
+  configurationChangeHarness.formatter.forceDeliver(.formatted("late cloud text"))
+  check(
+    configurationChangeHarness.inserter.insertedTexts == ["配置变更原文"],
+    "late cloud text cannot replace a configuration fallback"
+  )
+
+  let timeoutHarness = Harness(formattingEnabled: true)
+  timeoutHarness.pressAndRelease()
+  timeoutHarness.recognizer.complete(.success("超时原文"))
+  timeoutHarness.formatter.deliver(
+    .fallback(original: "不可信的回退文本", reason: .deadlineExceeded)
+  )
+  timeoutHarness.formatter.forceDeliver(.formatted("late success"))
+  check(
+    timeoutHarness.inserter.insertedTexts == ["超时原文"],
+    "a timeout fallback uses the session original and remains the only delivery after a late success"
+  )
+  check(
+    timeoutHarness.indicator.messages.last == "智能整理超时，已插入原文",
+    "a timeout fallback gives a fixed cause and a truthful original-text delivery result"
+  )
+
+  let networkHarness = Harness(formattingEnabled: true)
+  networkHarness.pressAndRelease()
+  networkHarness.recognizer.complete(.success("网络原文"))
+  networkHarness.formatter.deliver(
+    .fallback(original: "网络原文", reason: .transportFailure)
+  )
+  check(
+    networkHarness.indicator.messages.last == "智能整理网络不可用，已插入原文",
+    "a network fallback gives a fixed cause without provider response details"
+  )
+
+  let authorizationHarness = Harness(formattingEnabled: true)
+  authorizationHarness.pressAndRelease()
+  authorizationHarness.recognizer.complete(.success("鉴权原文"))
+  authorizationHarness.formatter.deliver(
+    .fallback(original: "鉴权原文", reason: .authorizationFailed)
+  )
+  check(
+    authorizationHarness.indicator.messages.last == "智能整理 Key 无效，已插入原文",
+    "an authorization fallback gives a fixed Key cause and a truthful delivery result"
+  )
+
+  let changedFocusHarness = Harness(formattingEnabled: true)
+  changedFocusHarness.pressAndRelease()
+  changedFocusHarness.focus.matchResult = .changed
+  changedFocusHarness.recognizer.complete(.success("焦点变化原文"))
+  changedFocusHarness.formatter.deliver(.formatted("焦点变化整理"))
+  check(
+    changedFocusHarness.inserter.copiedTexts == ["焦点变化整理"]
+      && changedFocusHarness.outcomeObserver.outcomes.first?.delivery == .copied,
+    "focus changes truthfully copy the formatted result"
+  )
+
+  let unverifiedHarness = Harness(formattingEnabled: true)
+  unverifiedHarness.inserter.deferCompletion = true
+  unverifiedHarness.pressAndRelease()
+  unverifiedHarness.recognizer.complete(.success("未验证原文"))
+  unverifiedHarness.formatter.deliver(.formatted("未验证整理"))
+  unverifiedHarness.inserter.completeDeferred(.unverified("target changed"))
+  check(
+    unverifiedHarness.outcomeObserver.outcomes.first?.delivery == .unverified,
+    "an unverified insertion remains distinct from an inserted or copied result"
+  )
+}
+
+private func testFormattingCancellationBoundaries() {
+  let cancellationHarness = Harness(formattingEnabled: true)
+  cancellationHarness.pressAndRelease()
+  cancellationHarness.recognizer.complete(.success("Esc 原文"))
+  cancellationHarness.coordinator.cancelFromHotkey()
+  cancellationHarness.formatter.forceDeliver(.formatted("late Esc text"))
+  check(
+    cancellationHarness.formatter.operation?.isCancelled == true
+      && cancellationHarness.inserter.insertCalls == 0
+      && cancellationHarness.outcomeObserver.outcomes.isEmpty,
+    "Esc cancels formatting and discards every late effect"
+  )
+
+  let secureHarness = Harness(formattingEnabled: true)
+  secureHarness.pressAndRelease()
+  secureHarness.recognizer.complete(.success("secure 原文"))
+  secureHarness.focus.current = SystemFocusSnapshot(
+    target: TargetSnapshot(
+      bundleIdentifier: "com.apple.Safari",
+      processIdentifier: 7,
+      elementIdentifier: "password",
+      isEditable: true,
+      isSecure: true
+    )
+  )
+  secureHarness.coordinator.refreshSystemState()
+  secureHarness.formatter.forceDeliver(.formatted("late secure text"))
+  check(
+    secureHarness.formatter.operation?.isCancelled == true
+      && secureHarness.outcomeObserver.outcomes.isEmpty,
+    "secure input cancels formatting without a fallback delivery"
+  )
+
+  let permissionHarness = Harness(formattingEnabled: true)
+  permissionHarness.pressAndRelease()
+  permissionHarness.recognizer.complete(.success("permission 原文"))
+  permissionHarness.permissions.microphonePermission = .denied
+  permissionHarness.coordinator.refreshSystemState()
+  check(
+    permissionHarness.formatter.operation?.isCancelled == true
+      && permissionHarness.outcomeObserver.outcomes.isEmpty,
+    "microphone revocation cancels a formatting session"
+  )
+
+  let secureAtAuthorizationHarness = Harness(formattingEnabled: true)
+  secureAtAuthorizationHarness.pressAndRelease()
+  secureAtAuthorizationHarness.recognizer.complete(.success("secure authorization 原文"))
+  secureAtAuthorizationHarness.focus.current = SystemFocusSnapshot(
+    target: TargetSnapshot(
+      bundleIdentifier: "com.apple.Safari",
+      processIdentifier: 8,
+      elementIdentifier: "password-at-send",
+      isEditable: true,
+      isSecure: true
+    )
+  )
+  secureAtAuthorizationHarness.formatter.deliver(.formatted("不应发送的整理文本"))
+  secureAtAuthorizationHarness.focus.current = SystemFocusSnapshot(
+    target: TargetSnapshot(
+      bundleIdentifier: "com.apple.Notes",
+      processIdentifier: 100,
+      elementIdentifier: "body",
+      isEditable: true,
+      isSecure: false
+    )
+  )
+  secureAtAuthorizationHarness.formatter.forceDeliver(.formatted("迟到的整理文本"))
+  check(
+    secureAtAuthorizationHarness.formatter.operation?.isCancelled == true
+      && secureAtAuthorizationHarness.inserter.insertCalls == 0
+      && secureAtAuthorizationHarness.inserter.copyCalls == 0
+      && secureAtAuthorizationHarness.outcomeObserver.outcomes.isEmpty,
+    "a secure target observed during send authorization latches cancellation despite later focus restoration"
+  )
+
+  let permissionAtAuthorizationHarness = Harness(formattingEnabled: true)
+  permissionAtAuthorizationHarness.pressAndRelease()
+  permissionAtAuthorizationHarness.recognizer.complete(.success("permission authorization 原文"))
+  permissionAtAuthorizationHarness.permissions.microphonePermission = .denied
+  permissionAtAuthorizationHarness.formatter.deliver(.formatted("不应发送的整理文本"))
+  permissionAtAuthorizationHarness.permissions.microphonePermission = .authorized
+  permissionAtAuthorizationHarness.formatter.forceDeliver(.formatted("迟到的整理文本"))
+  check(
+    permissionAtAuthorizationHarness.formatter.operation?.isCancelled == true
+      && permissionAtAuthorizationHarness.inserter.insertCalls == 0
+      && permissionAtAuthorizationHarness.inserter.copyCalls == 0
+      && permissionAtAuthorizationHarness.outcomeObserver.outcomes.isEmpty,
+    "a permission revoke observed during send authorization terminally cancels despite later restoration"
+  )
+
+  let pauseHarness = Harness(formattingEnabled: true)
+  pauseHarness.pressAndRelease()
+  pauseHarness.recognizer.complete(.success("pause 原文"))
+  pauseHarness.coordinator.setPaused(true)
+  check(
+    pauseHarness.formatter.operation?.isCancelled == true && pauseHarness.outcomeObserver.outcomes.isEmpty,
+    "pausing cancels formatting without insertion, copy, or history outcome"
+  )
+
+  let modelChangeHarness = Harness(formattingEnabled: true)
+  modelChangeHarness.pressAndRelease()
+  modelChangeHarness.recognizer.complete(.success("model 原文"))
+  modelChangeHarness.coordinator.cancelForModelChange()
+  check(
+    modelChangeHarness.formatter.operation?.isCancelled == true
+      && modelChangeHarness.outcomeObserver.outcomes.isEmpty,
+    "an ASR model change cancels formatting without delivery"
+  )
+
+  let quotaThrottleHarness = Harness(formattingEnabled: true)
+  quotaThrottleHarness.pressAndRelease()
+  quotaThrottleHarness.recognizer.complete(.success("首次额度不足原文"))
+  quotaThrottleHarness.formatter.deliver(
+    .fallback(original: "首次额度不足原文", reason: .paymentRequired)
+  )
+  check(
+    quotaThrottleHarness.indicator.messages.last == "智能整理额度不足，已插入原文",
+    "the first quota fallback reports the fixed quota cause"
+  )
+  quotaThrottleHarness.pressAndRelease()
+  quotaThrottleHarness.recognizer.complete(.success("重复额度不足原文"))
+  quotaThrottleHarness.formatter.deliver(
+    .fallback(original: "重复额度不足原文", reason: .paymentRequired)
+  )
+  check(
+    quotaThrottleHarness.indicator.messages.last == "智能整理不可用，已插入原文",
+    "the full quota warning is throttled for one hour"
+  )
+
+  let quotaUnverifiedHarness = Harness(formattingEnabled: true)
+  quotaUnverifiedHarness.inserter.deferCompletion = true
+  quotaUnverifiedHarness.pressAndRelease()
+  quotaUnverifiedHarness.recognizer.complete(.success("额度不足原文"))
+  quotaUnverifiedHarness.formatter.deliver(
+    .fallback(original: "额度不足原文", reason: .paymentRequired)
+  )
+  quotaUnverifiedHarness.inserter.completeDeferred(.unverified("target changed"))
+  check(
+    quotaUnverifiedHarness.indicator.messages.last == "智能整理不可用，原文交付未验证",
+    "a quota warning never claims copied or inserted text when delivery is unverified"
   )
 }
 
@@ -1468,6 +1821,8 @@ enum CoordinatorHarnessMain {
     testSecureLatchAndPermissionRevocation()
     testCopyOnlyPrepareBusyAndInterruption()
     testFocusChangeAndNoSpeech()
+    testFormattingSessionOwnershipAndFallbacks()
+    testFormattingCancellationBoundaries()
     testOutcomeAndMicrophoneTestBoundaries()
     testPracticeBindingIsLiveForEveryRetry()
     testReceiptEndsOnExpiryFocusChangeAndNewPress()

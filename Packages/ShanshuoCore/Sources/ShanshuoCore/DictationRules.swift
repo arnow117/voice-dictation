@@ -8,6 +8,7 @@ public enum DictationPhase: String, Equatable, Sendable {
   case listening
   case stopping
   case recognizing
+  case formatting
   case inserting
   case cancelled
   case failed

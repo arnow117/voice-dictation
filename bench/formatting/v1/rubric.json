@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "fixture": "heldout.jsonl",
+  "category_counts": {
+    "list": 15,
+    "cleanup_correction": 15,
+    "layout_numbers": 10,
+    "fidelity_injection": 10,
+    "unchanged": 10
+  },
+  "thresholds": {
+    "minimum_valid_cases": 60,
+    "minimum_accuracy_percent": 95,
+    "maximum_final_fidelity_errors": 0,
+    "maximum_p50_ms": 1000,
+    "maximum_p95_ms": 2500
+  },
+  "fixture_constraints": {
+    "public_synthetic": true,
+    "maximum_input_characters": 200,
+    "frozen_before_first_provider_request": true
+  },
+  "scoring": {
+    "punctuation_variants": "Allowed for non-list cases after normalizing whitespace and terminal or clause punctuation.",
+    "list": "Requires the fixture's ordered N. or unordered - marker and exact normalized item order; an optional normalized prefix must remain.",
+    "layout": "Fixtures may require line breaks and paragraphs at named before/after boundaries, plus specific Chinese-English spacing pairs; punctuation normalization does not waive those requirements.",
+    "fallback": "Transport, credential, authorization, quota, timeout, redirect, oversized, and invalid-response fallbacks are invalid. A fidelityRejected fallback keeps its raw provider text for separate scoring; its safe final text can avoid a final fidelity error but still fails required transformations."
+  }
+}

@@ -146,6 +146,11 @@ struct DictationRulesTests {
     #expect(generation.value == 8)
   }
 
+  @Test("formatting is an explicit processing phase")
+  func formattingPhase() {
+    #expect(DictationPhase.formatting.rawValue == "formatting")
+  }
+
   @Test("clipboard restoration never overwrites a newer user clipboard")
   func clipboardOwnership() {
     #expect(ClipboardOwnership.mayRestore(ownedChangeCount: 12, currentChangeCount: 12))

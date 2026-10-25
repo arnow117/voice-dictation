@@ -162,6 +162,340 @@ private final class FakeTextInserter: TextInserting {
   }
 }
 
+private final class FakeFormattingOperation: FormattingOperation {
+  private(set) var wasCancelled = false
+
+  func cancel() {
+    wasCancelled = true
+  }
+}
+
+private final class ImmediateFormattingService: FormattingServicing {
+  let result: FormattingResult
+  private(set) var requestCount = 0
+
+  init(result: FormattingResult) {
+    self.result = result
+  }
+
+  @discardableResult
+  func format(
+    request: FormattingRequest,
+    configuration: FormattingConfigurationSnapshot,
+    authorizeSend: @escaping () -> Bool,
+    completion: @escaping (FormattingResult) -> Void
+  ) -> FormattingOperation {
+    requestCount += 1
+    if authorizeSend() {
+      completion(result)
+    }
+    return FakeFormattingOperation()
+  }
+}
+
+/// Holds a callback after the settings controller has started a real formatter operation. Tests
+/// can then force a late success even after the controller has cancelled the operation.
+private final class DeferredFormattingService: FormattingServicing {
+  private(set) var operation: FakeFormattingOperation?
+  private(set) var authorizationWasAccepted = false
+  private var completion: ((FormattingResult) -> Void)?
+
+  @discardableResult
+  func format(
+    request: FormattingRequest,
+    configuration: FormattingConfigurationSnapshot,
+    authorizeSend: @escaping () -> Bool,
+    completion: @escaping (FormattingResult) -> Void
+  ) -> FormattingOperation {
+    authorizationWasAccepted = authorizeSend()
+    self.completion = completion
+    let operation = FakeFormattingOperation()
+    self.operation = operation
+    return operation
+  }
+
+  func deliverLate(_ result: FormattingResult) {
+    completion?(result)
+  }
+}
+
+private func descendantViews(of view: NSView) -> [NSView] {
+  [view] + view.subviews.flatMap(descendantViews)
+}
+
+private func button(named title: String, in view: NSView) -> NSButton? {
+  descendantViews(of: view).compactMap { $0 as? NSButton }.first { $0.title == title }
+}
+
+private func secureField(in view: NSView) -> NSSecureTextField? {
+  descendantViews(of: view).compactMap { $0 as? NSSecureTextField }.first
+}
+
+private func hasLabel(_ value: String, in view: NSView) -> Bool {
+  descendantViews(of: view).compactMap { $0 as? NSTextField }.contains {
+    $0.stringValue == value
+  }
+}
+
+private func isEffectivelyHidden(_ view: NSView) -> Bool {
+  var current: NSView? = view
+  while let candidate = current {
+    if candidate.isHidden {
+      return true
+    }
+    current = candidate.superview
+  }
+  return false
+}
+
+private func waitForMain(
+  timeout: TimeInterval = 1,
+  until condition: @escaping () -> Bool
+) -> Bool {
+  let deadline = Date().addingTimeInterval(timeout)
+  while Date() < deadline {
+    if condition() {
+      return true
+    }
+    RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.01))
+  }
+  return condition()
+}
+
+private func testFormattingSettingsWorkflow() {
+  let defaults = UserDefaults(suiteName: "shanshuo-formatting-settings-workflow-\(UUID().uuidString)")!
+  let configurationStore = FormattingConfigurationStore(defaults: defaults)
+  let credentialStore = FormattingCredentialStore()
+  let formatter = ImmediateFormattingService(result: .formatted("第一，买牛奶。"))
+  let controller = FormattingSettingsWindowController(
+    configurationStore: configurationStore,
+    credentialStore: credentialStore,
+    formatter: formatter
+  )
+
+  guard let contentView = controller.window?.contentView,
+    let acknowledgement = button(named: "我了解本次识别文字会发送给 MiniMax 进行整理。", in: contentView),
+    let save = button(named: "使用本次 Key", in: contentView),
+    let test = button(named: "测试连接", in: contentView),
+    let enable = button(named: "开启智能整理", in: contentView),
+    let delete = button(named: "清除本次 Key", in: contentView),
+    let keyField = secureField(in: contentView)
+  else {
+    check(false, "the formatting settings window exposes its production controls")
+    return
+  }
+
+  check(
+    isEffectivelyHidden(keyField),
+    "first use hides the Key input before the data-flow acknowledgement"
+  )
+  check(test.isHidden, "first use hides the connection test before the acknowledgement")
+  acknowledgement.performClick(nil)
+  check(
+    !isEffectivelyHidden(keyField),
+    "acknowledging the data flow reveals the Key input"
+  )
+
+  keyField.stringValue = "fixture-key-not-a-real-secret"
+  save.performClick(nil)
+  check(
+    waitForMain { configurationStore.snapshot().credential != nil },
+    "manual secure input imports a Key into the shared process-memory cache"
+  )
+  guard let descriptor = configurationStore.snapshot().credential else {
+    check(false, "manual secure input produces a configuration descriptor")
+    return
+  }
+  check(
+    (try? credentialStore.read(reference: descriptor.reference)) == "fixture-key-not-a-real-secret",
+    "the settings controller writes its configured Key to the injected cache instance"
+  )
+  check(test.isEnabled, "an acknowledged configuration with a session Key can test the connection")
+  test.performClick(nil)
+  check(formatter.requestCount == 1, "the explicit test uses the injected production formatter seam")
+  check(hasLabel("连接测试成功。可以开启智能整理。", in: contentView), "the successful test result remains visible after rendering")
+  check(enable.isEnabled, "only a completed test enables the explicit enable action")
+  enable.performClick(nil)
+  check(configurationStore.snapshot().enabled, "the acknowledge-test-enable action chain enables formatting")
+
+  delete.performClick(nil)
+  check(!configurationStore.snapshot().enabled, "clearing a Key immediately disables formatting")
+  check(
+    configurationStore.snapshot().credential == nil,
+    "clearing a process-memory Key removes its configuration descriptor"
+  )
+  check(
+    (try? credentialStore.read(reference: descriptor.reference)) == nil,
+    "clearing a process-memory Key makes its cache entry unavailable"
+  )
+  check(
+    hasLabel("已清除本次运行 Key，智能整理保持关闭。", in: contentView),
+    "clearing a Key describes the session-only result"
+  )
+
+  let staleDefaults = UserDefaults(suiteName: "shanshuo-formatting-settings-stale-\(UUID().uuidString)")!
+  let staleStore = FormattingConfigurationStore(defaults: staleDefaults)
+  let staleCredentials = FormattingCredentialStore()
+  let staleFormatter = DeferredFormattingService()
+  let staleController = FormattingSettingsWindowController(
+    configurationStore: staleStore,
+    credentialStore: staleCredentials,
+    formatter: staleFormatter
+  )
+  guard let staleContent = staleController.window?.contentView,
+    let staleAcknowledgement = button(named: "我了解本次识别文字会发送给 MiniMax 进行整理。", in: staleContent),
+    let staleTest = button(named: "测试连接", in: staleContent),
+    let staleEnable = button(named: "开启智能整理", in: staleContent)
+  else {
+    check(false, "a second formatting settings window exposes its production controls")
+    return
+  }
+
+  staleAcknowledgement.performClick(nil)
+  let staleDescriptor = try! staleCredentials.save("second-fixture-key-not-a-real-secret")
+  _ = staleStore.replaceCredential(staleDescriptor, model: .flash, endpoint: .domestic)
+  staleTest.performClick(nil)
+  check(
+    staleFormatter.authorizationWasAccepted && staleFormatter.operation != nil && !staleEnable.isEnabled,
+    "a connection test remains pending until its formatter callback completes"
+  )
+  staleController.windowWillClose(Notification(name: NSWindow.willCloseNotification))
+  staleController.showWindow(nil)
+  staleController.window?.orderOut(nil)
+  staleFormatter.deliverLate(.formatted("第一，买牛奶。"))
+  check(
+    staleFormatter.operation?.wasCancelled == true
+      && !staleEnable.isEnabled
+      && !staleStore.snapshot().enabled,
+    "closing and reopening cancels a pending test and ignores its forced late success"
+  )
+
+  let invalidDefaults = UserDefaults(suiteName: "shanshuo-formatting-settings-invalid-key-\(UUID().uuidString)")!
+  let invalidStore = FormattingConfigurationStore(defaults: invalidDefaults)
+  let invalidCredentials = FormattingCredentialStore()
+  let invalidFormatter = ImmediateFormattingService(
+    result: .fallback(original: "第一买牛奶第二取快递", reason: .authorizationFailed)
+  )
+  let invalidController = FormattingSettingsWindowController(
+    configurationStore: invalidStore,
+    credentialStore: invalidCredentials,
+    formatter: invalidFormatter
+  )
+  guard let invalidContent = invalidController.window?.contentView,
+    let invalidAcknowledgement = button(named: "我了解本次识别文字会发送给 MiniMax 进行整理。", in: invalidContent),
+    let invalidTest = button(named: "测试连接", in: invalidContent),
+    let keyHelp = button(named: "获取 MiniMax API Key", in: invalidContent)
+  else {
+    check(false, "the invalid-Key state exposes its production controls")
+    return
+  }
+
+  invalidAcknowledgement.performClick(nil)
+  let invalidDescriptor = try! invalidCredentials.save("invalid-fixture-key-not-a-real-secret")
+  _ = invalidStore.replaceCredential(invalidDescriptor, model: .flash, endpoint: .domestic)
+  invalidTest.performClick(nil)
+  check(
+    hasLabel(
+      "Key 无效。智能整理仍保持关闭。请通过下方官方链接获取或更新 MiniMax API Key。",
+      in: invalidContent
+    ),
+    "invalid Key feedback reports that initially disabled formatting remains disabled"
+  )
+  check(!keyHelp.isHidden, "invalid Key feedback retains the official Key console link")
+  check(!invalidStore.snapshot().enabled, "an invalid Key never enables formatting")
+}
+
+private func testConnectionFeedbackPreservesEnabledState() {
+  let defaults = UserDefaults(
+    suiteName: "shanshuo-formatting-settings-feedback-\(UUID().uuidString)"
+  )!
+  let configurationStore = FormattingConfigurationStore(defaults: defaults)
+  let credentialStore = FormattingCredentialStore()
+  let formatter = DeferredFormattingService()
+  let controller = FormattingSettingsWindowController(
+    configurationStore: configurationStore,
+    credentialStore: credentialStore,
+    formatter: formatter
+  )
+
+  guard let contentView = controller.window?.contentView,
+    let acknowledgement = button(named: "我了解本次识别文字会发送给 MiniMax 进行整理。", in: contentView),
+    let test = button(named: "测试连接", in: contentView),
+    let enable = button(named: "开启智能整理", in: contentView)
+  else {
+    check(false, "the feedback test exposes the formatting controls")
+    return
+  }
+
+  acknowledgement.performClick(nil)
+  let descriptor = try! credentialStore.save("feedback-fixture-key-not-a-real-secret")
+  _ = configurationStore.replaceCredential(descriptor, model: .flash, endpoint: .domestic)
+
+  test.performClick(nil)
+  formatter.deliverLate(
+    .fallback(original: "第一买牛奶第二取快递", reason: .transportFailure)
+  )
+  check(
+    hasLabel("连接测试未完成。智能整理仍保持关闭。", in: contentView),
+    "a failed test reports that initially disabled formatting remains disabled"
+  )
+  check(
+    !configurationStore.snapshot().enabled,
+    "a failed test does not enable initially disabled formatting"
+  )
+
+  test.performClick(nil)
+  formatter.deliverLate(
+    .fallback(original: "第一买牛奶第二取快递", reason: .deadlineExceeded)
+  )
+  check(
+    hasLabel("连接测试未完成。智能整理仍保持关闭。", in: contentView),
+    "a timed-out test reports that initially disabled formatting remains disabled"
+  )
+
+  test.performClick(nil)
+  formatter.deliverLate(.formatted("第一，买牛奶。"))
+  enable.performClick(nil)
+  check(configurationStore.snapshot().enabled, "a successful test can enable formatting")
+
+  test.performClick(nil)
+  formatter.deliverLate(
+    .fallback(original: "第一买牛奶第二取快递", reason: .transportFailure)
+  )
+  check(
+    hasLabel("连接测试未完成。智能整理仍保持开启。", in: contentView),
+    "a transport failure reports that enabled formatting remains enabled"
+  )
+  check(
+    configurationStore.snapshot().enabled,
+    "a transport failure does not change the enabled switch"
+  )
+
+  test.performClick(nil)
+  formatter.deliverLate(
+    .fallback(original: "第一买牛奶第二取快递", reason: .deadlineExceeded)
+  )
+  check(
+    hasLabel("连接测试未完成。智能整理仍保持开启。", in: contentView),
+    "a timeout reports that enabled formatting remains enabled"
+  )
+  check(
+    configurationStore.snapshot().enabled,
+    "a timeout does not change the enabled switch"
+  )
+
+  test.performClick(nil)
+  formatter.deliverLate(.formatted("第一，买牛奶。"))
+  check(
+    hasLabel("连接测试成功。智能整理保持开启。", in: contentView),
+    "a successful retest reports that enabled formatting remains enabled"
+  )
+  check(
+    configurationStore.snapshot().enabled,
+    "a successful retest does not change the enabled switch"
+  )
+}
+
 private final class FakeHotkeys: HotkeyMonitoring {
   var isShortcutAvailable = true
   var onHold: ((HoldShortcut, Bool) -> Void)?
@@ -383,6 +717,11 @@ enum NativeWindowConstructionHarness {
       !coldStartModel.isReadyForFirstDictation,
       "a model becoming ready cannot record cold readiness while B remains unprepared"
     )
+    testFormattingSettingsWorkflow()
+    testConnectionFeedbackPreservesEnabledState()
+    let formattingStore = FormattingConfigurationStore(
+      defaults: UserDefaults(suiteName: "shanshuo-formatting-window-\(UUID().uuidString)")!
+    )
     let controllers: [NSWindowController] = [
       ModelManagementWindowController(manager: FakeModelManager()),
       OnboardingWindowController(
@@ -391,12 +730,17 @@ enum NativeWindowConstructionHarness {
         openModelManagement: {}
       ),
       HistoryWindowController(model: appModel),
-      PrivacyWindowController(model: appModel),
+      PrivacyWindowController(model: appModel, formattingConfigurationStore: formattingStore),
+      FormattingSettingsWindowController(
+        configurationStore: formattingStore,
+        formatter: DisabledFormattingService()
+      ),
       SettingsWindowController(
         model: appModel,
         openAccessibilitySettings: {},
         openKeyboardSettings: {},
         openModelManagement: {},
+        openFormattingSettings: {},
         openHistory: {},
         openPrivacy: {}
       ),

@@ -76,6 +76,12 @@ bash "$ROOT/tests/integration/run_model_downloader_harness.sh"
 echo "== model downloader local HTTP harness"
 bash "$ROOT/tests/integration/run_model_downloader_http_harness.sh"
 
+echo "== formatting harness"
+bash "$ROOT/tests/integration/run_formatting_harness.sh"
+
+echo "== formatting evaluation scorer selftest"
+bash "$ROOT/tests/integration/run_formatting_eval_selftest.sh"
+
 if [ "${SKIP_ASR:-0}" != 1 ]; then
   echo "== ASR smoke (app --transcribe, model $WORK/models/qwen3-asr-0.6b-int8)"
   SHANSHUO_MODEL_DIR="$WORK/models/qwen3-asr-0.6b-int8" UV_CACHE_DIR="${UV_CACHE_DIR:-$HOME/.cache/uv}" \

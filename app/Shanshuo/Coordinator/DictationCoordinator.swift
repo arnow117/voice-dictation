@@ -132,6 +132,19 @@ final class DictationCoordinator {
     let shortcut: HoldShortcut
     let insertionMode: SessionInsertionMode
     let purpose: SessionPurpose
+    let formattingConfiguration: FormattingConfigurationSnapshot
+  }
+
+  private struct FormattingAttempt {
+    let id: UUID
+    let originalText: String
+    let configuration: FormattingConfigurationSnapshot
+  }
+
+  private enum DeliverySource {
+    case local
+    case formatted
+    case formattingFallback(FormattingFallbackReason)
   }
 
   private struct RetainedReceipt {
@@ -146,6 +159,7 @@ final class DictationCoordinator {
   private let recognizer: ASRRecognizing
   private let textInserter: TextInserting
   private let hotkeys: HotkeyMonitoring
+  private let formatter: FormattingServicing
   private let clock: DictationClock
   private let timerScheduler: CoordinatorTimerScheduling
   private let performanceDiagnostics: PerformanceEventRecording
@@ -159,6 +173,10 @@ final class DictationCoordinator {
   private var receiptExpiryTimer: CoordinatorTimer?
   private var pendingInsertion: TextInsertionOperation?
   private var pendingRecognition: ASRTranscriptionOperation?
+  private var pendingFormatting: FormattingOperation?
+  private var formattingAttempt: FormattingAttempt?
+  private var currentFormattingConfiguration: FormattingConfigurationSnapshot
+  private var lastQuotaWarningAt: Date?
   private var audioOperation: AudioCaptureOperation?
   private var retainedReceipt: RetainedReceipt?
   private var microphoneTestOperation: AudioCaptureOperation?
@@ -189,6 +207,8 @@ final class DictationCoordinator {
     recognizer: ASRRecognizing,
     textInserter: TextInserting,
     hotkeys: HotkeyMonitoring,
+    formatter: FormattingServicing = DisabledFormattingService(),
+    formattingConfiguration: FormattingConfigurationSnapshot = .disabled,
     clock: DictationClock = SystemDictationClock(),
     timerScheduler: CoordinatorTimerScheduling = MainRunLoopTimerScheduler(),
     performanceDiagnostics: PerformanceEventRecording = NoopPerformanceEventRecorder(),
@@ -202,6 +222,8 @@ final class DictationCoordinator {
     self.recognizer = recognizer
     self.textInserter = textInserter
     self.hotkeys = hotkeys
+    self.formatter = formatter
+    currentFormattingConfiguration = formattingConfiguration
     self.clock = clock
     self.timerScheduler = timerScheduler
     self.performanceDiagnostics = performanceDiagnostics
@@ -218,6 +240,39 @@ final class DictationCoordinator {
     if paused {
       cancel(message: "语音输入已暂停")
     }
+  }
+
+  /// The main app owns the configuration store observation and supplies a safe snapshot here.
+  /// A changed revision never lets a previous formatting attempt resume or deliver cloud text.
+  func updateFormattingConfiguration(_ configuration: FormattingConfigurationSnapshot) {
+    requireMainThread()
+    let previousRevision = currentFormattingConfiguration.revision
+    currentFormattingConfiguration = configuration
+    guard previousRevision != configuration.revision,
+      let session = activeSession,
+      phase == .formatting,
+      let attempt = formattingAttempt,
+      attempt.configuration.revision != configuration.revision
+    else {
+      return
+    }
+
+    cancelPendingFormatting()
+    formattingAttempt = nil
+    cancelIfSecureInputActive()
+    guard activeSession?.generation == session.generation, phase == .formatting else {
+      return
+    }
+    guard permissionsAreStillAllowed(for: session) else {
+      cancel(message: "权限已撤销，本次内容已丢弃")
+      return
+    }
+    insert(
+      finalText: attempt.originalText,
+      originalText: attempt.originalText,
+      generation: session.generation,
+      source: .formattingFallback(.authorizationDenied)
+    )
   }
 
   var isMicrophoneTestActive: Bool {
@@ -438,7 +493,8 @@ final class DictationCoordinator {
       shortcut: shortcut,
       insertionMode: permissions.accessibilityPermission.isAuthorized
         ? .directInsertion : .copyOnly,
-      purpose: claimedPurpose(for: pressTarget.target, attemptID: attemptID)
+      purpose: claimedPurpose(for: pressTarget.target, attemptID: attemptID),
+      formattingConfiguration: currentFormattingConfiguration
     )
     activeSession = session
     secureInputLatched = false
@@ -627,11 +683,129 @@ final class DictationCoordinator {
         finish(message: "没有听到声音")
         return
       }
-      insert(text, generation: completionGeneration)
+      if shouldFormat(session: session) {
+        startFormatting(text, session: session, generation: completionGeneration)
+      } else {
+        insert(
+          finalText: text,
+          originalText: text,
+          generation: completionGeneration,
+          source: .local
+        )
+      }
     }
   }
 
-  private func insert(_ text: String, generation completionGeneration: SessionGeneration) {
+  private func startFormatting(
+    _ originalText: String,
+    session: ActiveSession,
+    generation completionGeneration: SessionGeneration
+  ) {
+    requireMainThread()
+    guard activeSession?.generation == completionGeneration,
+      shouldFormat(session: session)
+    else {
+      insert(
+        finalText: originalText,
+        originalText: originalText,
+        generation: completionGeneration,
+        source: .local
+      )
+      return
+    }
+
+    phase = .formatting
+    indicator.showProcessing()
+    let attempt = FormattingAttempt(
+      id: UUID(),
+      originalText: originalText,
+      configuration: session.formattingConfiguration
+    )
+    formattingAttempt = attempt
+    let operation = FormattingOperationSlot()
+    pendingFormatting = operation
+    let underlyingOperation = formatter.format(
+      request: FormattingRequest(originalText: originalText, dictionaryTerms: []),
+      configuration: attempt.configuration,
+      authorizeSend: { [weak self, weak operation] in
+        guard let self, let operation else {
+          return false
+        }
+        return self.canSendFormatting(
+          session: session,
+          attempt: attempt,
+          operation: operation,
+          generation: completionGeneration
+        )
+      },
+      completion: { [weak self, weak operation] result in
+        guard let operation else {
+          return
+        }
+        self?.handleFormatting(
+          result,
+          session: session,
+          attempt: attempt,
+          generation: completionGeneration,
+          operation: operation
+        )
+      }
+    )
+    operation.adopt(underlyingOperation)
+  }
+
+  private func handleFormatting(
+    _ result: FormattingResult,
+    session: ActiveSession,
+    attempt: FormattingAttempt,
+    generation completionGeneration: SessionGeneration,
+    operation: FormattingOperation
+  ) {
+    requireMainThread()
+    guard pendingFormatting === operation,
+      formattingAttempt?.id == attempt.id,
+      activeSession?.generation == completionGeneration,
+      phase == .formatting
+    else {
+      return
+    }
+    pendingFormatting = nil
+    formattingAttempt = nil
+    operation.cancel()
+    cancelIfSecureInputActive()
+    guard activeSession?.generation == completionGeneration,
+      permissionsAreStillAllowed(for: session)
+    else {
+      if activeSession?.generation == completionGeneration {
+        cancel(message: "权限已撤销，本次内容已丢弃")
+      }
+      return
+    }
+
+    switch result {
+    case .formatted(let text):
+      insert(
+        finalText: text,
+        originalText: attempt.originalText,
+        generation: completionGeneration,
+        source: .formatted
+      )
+    case .fallback(_, let reason):
+      insert(
+        finalText: attempt.originalText,
+        originalText: attempt.originalText,
+        generation: completionGeneration,
+        source: .formattingFallback(reason)
+      )
+    }
+  }
+
+  private func insert(
+    finalText: String,
+    originalText: String,
+    generation completionGeneration: SessionGeneration,
+    source: DeliverySource
+  ) {
     requireMainThread()
     guard let session = activeSession, let releaseTarget = session.releaseTarget else {
       finish(message: "焦点信息不可用，本次内容已丢弃")
@@ -660,23 +834,37 @@ final class DictationCoordinator {
     case .discard:
       finish(message: decision.message)
     case .copy:
-      startInsertion(session: session, text: text, generation: completionGeneration) { completion in
+      startInsertion(
+        session: session,
+        finalText: finalText,
+        originalText: originalText,
+        source: source,
+        generation: completionGeneration
+      ) { completion in
         self.textInserter.copy(
-          text,
+          finalText,
           requiresAccessibility: session.insertionMode == .directInsertion,
           completion: completion
         )
       }
     case .insert:
-      startInsertion(session: session, text: text, generation: completionGeneration) { completion in
-        self.textInserter.insert(text, expectedTarget: releaseTarget, completion: completion)
+      startInsertion(
+        session: session,
+        finalText: finalText,
+        originalText: originalText,
+        source: source,
+        generation: completionGeneration
+      ) { completion in
+        self.textInserter.insert(finalText, expectedTarget: releaseTarget, completion: completion)
       }
     }
   }
 
   private func startInsertion(
     session: ActiveSession,
-    text: String,
+    finalText: String,
+    originalText: String,
+    source: DeliverySource,
     generation completionGeneration: SessionGeneration,
     start: (@escaping (TextInsertionResult) -> Void) -> TextInsertionOperation
   ) {
@@ -692,7 +880,9 @@ final class DictationCoordinator {
       }
       self?.handleInsertion(
         result,
-        text: text,
+        finalText: finalText,
+        originalText: originalText,
+        source: source,
         generation: completionGeneration,
         operation: operation
       )
@@ -702,7 +892,9 @@ final class DictationCoordinator {
 
   private func handleInsertion(
     _ result: TextInsertionResult,
-    text: String,
+    finalText: String,
+    originalText: String,
+    source: DeliverySource,
     generation completionGeneration: SessionGeneration,
     operation: TextInsertionOperation
   ) {
@@ -730,18 +922,40 @@ final class DictationCoordinator {
     switch result {
     case .inserted(let receipt):
       retain(receipt: receipt)
-      publishOutcome(session: session, text: text, delivery: .inserted)
-      finish(message: "已插入", performanceResult: .verifiedInsertion)
+      publishOutcome(
+        session: session,
+        originalText: originalText,
+        finalText: finalText,
+        delivery: .inserted
+      )
+      finish(
+        message: deliveryMessage(for: source, delivery: .inserted),
+        performanceResult: .verifiedInsertion
+      )
     case .copied(let message):
-      publishOutcome(session: session, text: text, delivery: .copied)
+      publishOutcome(
+        session: session,
+        originalText: originalText,
+        finalText: finalText,
+        delivery: .copied
+      )
+      let deliveryMessage = deliveryMessage(for: source, delivery: .copied, defaultMessage: message)
       if wasCopyOnlySession {
-        finishCopyOnly(message: message)
+        finishCopyOnly(message: deliveryMessage)
       } else {
-        finish(message: message, performanceResult: .copied)
+        finish(message: deliveryMessage, performanceResult: .copied)
       }
     case .unverified(let message):
-      publishOutcome(session: session, text: text, delivery: .unverified)
-      finish(message: message, performanceResult: .unverified)
+      publishOutcome(
+        session: session,
+        originalText: originalText,
+        finalText: finalText,
+        delivery: .unverified
+      )
+      finish(
+        message: deliveryMessage(for: source, delivery: .unverified, defaultMessage: message),
+        performanceResult: .unverified
+      )
     case .discarded(let message):
       finish(message: message)
     }
@@ -840,6 +1054,12 @@ final class DictationCoordinator {
     pendingRecognition = nil
   }
 
+  private func cancelPendingFormatting() {
+    pendingFormatting?.cancel()
+    pendingFormatting = nil
+    formattingAttempt = nil
+  }
+
   private func cancel(message: String) {
     if isMicrophoneTestActive {
       finishMicrophoneTest(cancelled: true)
@@ -852,6 +1072,7 @@ final class DictationCoordinator {
     recordingTimer?.cancel()
     recordingTimer = nil
     cancelPendingRecognition()
+    cancelPendingFormatting()
     cancelPendingInsertion()
     cancelAudioOperation()
     recordSessionFinished(result: .cancelled)
@@ -869,6 +1090,7 @@ final class DictationCoordinator {
     recordingTimer?.cancel()
     recordingTimer = nil
     cancelPendingRecognition()
+    cancelPendingFormatting()
     cancelPendingInsertion()
     cancelAudioOperation()
     recordSessionFinished(result: performanceResult)
@@ -883,6 +1105,7 @@ final class DictationCoordinator {
     recordingTimer?.cancel()
     recordingTimer = nil
     cancelPendingRecognition()
+    cancelPendingFormatting()
     cancelPendingInsertion()
     cancelAudioOperation()
     recordSessionFinished(result: .copied)
@@ -939,7 +1162,8 @@ final class DictationCoordinator {
 
   private func publishOutcome(
     session: ActiveSession,
-    text: String,
+    originalText: String,
+    finalText: String,
     delivery: SessionOutcome.Delivery
   ) {
     guard let target = session.releaseTarget?.target else {
@@ -948,14 +1172,134 @@ final class DictationCoordinator {
     onSessionOutcome(
       SessionOutcome(
         sessionID: session.id,
-        recognizedText: text,
-        finalText: text,
+        recognizedText: originalText,
+        finalText: finalText,
         delivery: delivery,
         target: target,
         purpose: session.purpose,
         createdAt: clock.now()
       )
     )
+  }
+
+  private func shouldFormat(session: ActiveSession) -> Bool {
+    guard case .dictation = session.purpose else {
+      return false
+    }
+    let configuration = session.formattingConfiguration
+    return configuration.enabled
+      && configuration.credential != nil
+      && configuration.revision == currentFormattingConfiguration.revision
+  }
+
+  private func canSendFormatting(
+    session: ActiveSession,
+    attempt: FormattingAttempt,
+    operation: FormattingOperation,
+    generation completionGeneration: SessionGeneration
+  ) -> Bool {
+    requireMainThread()
+    guard pendingFormatting === operation,
+      formattingAttempt?.id == attempt.id,
+      activeSession?.generation == completionGeneration,
+      phase == .formatting,
+      !secureInputLatched,
+      !isPaused,
+      currentFormattingConfiguration.revision == attempt.configuration.revision
+    else {
+      return false
+    }
+
+    guard permissionsAreStillAllowed(for: session) else {
+      cancel(message: "权限已撤销，本次内容已丢弃")
+      return false
+    }
+
+    let target = focusInspector.snapshot()
+    guard !target.target.isSecure else {
+      secureInputLatched = true
+      cancel(message: "密码框中不支持语音输入，本次内容已丢弃")
+      return false
+    }
+    return true
+  }
+
+  private func deliveryMessage(
+    for source: DeliverySource,
+    delivery: SessionOutcome.Delivery,
+    defaultMessage: String? = nil
+  ) -> String {
+    switch source {
+    case .local:
+      return defaultMessage ?? (delivery == .inserted ? "已插入原文" : "已复制原文")
+    case .formatted:
+      switch delivery {
+      case .inserted:
+        return "已插入整理文本"
+      case .copied:
+        return "已复制整理文本"
+      case .unverified:
+        return "整理文本交付未验证"
+      }
+    case .formattingFallback(let reason):
+      if reason == .paymentRequired, delivery != .unverified, shouldShowQuotaWarning() {
+        return delivery == .inserted ? "智能整理额度不足，已插入原文" : "智能整理额度不足，已复制原文"
+      }
+      return formattingFallbackMessage(reason: reason, delivery: delivery)
+    }
+  }
+
+  private func formattingFallbackMessage(
+    reason: FormattingFallbackReason,
+    delivery: SessionOutcome.Delivery
+  ) -> String {
+    let prefix: String
+    switch reason {
+    case .invalidRequest:
+      prefix = "智能整理请求无效"
+    case .credentialUnavailable:
+      prefix = "智能整理 Key 不可用"
+    case .authorizationDenied:
+      prefix = "智能整理发送已取消"
+    case .deadlineExceeded:
+      prefix = "智能整理超时"
+    case .transportFailure:
+      prefix = "智能整理网络不可用"
+    case .authorizationFailed:
+      prefix = "智能整理 Key 无效"
+    case .paymentRequired:
+      prefix = "智能整理不可用"
+    case .rateLimited:
+      prefix = "智能整理请求已限流"
+    case .providerRejected:
+      prefix = "智能整理服务拒绝"
+    case .redirected:
+      prefix = "智能整理服务地址异常"
+    case .responseTooLarge:
+      prefix = "智能整理响应过大"
+    case .invalidResponse:
+      prefix = "智能整理响应无效"
+    case .fidelityRejected:
+      prefix = "智能整理结果校验失败"
+    }
+
+    switch delivery {
+    case .inserted:
+      return "\(prefix)，已插入原文"
+    case .copied:
+      return "\(prefix)，已复制原文"
+    case .unverified:
+      return "\(prefix)，原文交付未验证"
+    }
+  }
+
+  private func shouldShowQuotaWarning() -> Bool {
+    let now = clock.now()
+    guard lastQuotaWarningAt.map({ now.timeIntervalSince($0) >= 60 * 60 }) != false else {
+      return false
+    }
+    lastQuotaWarningAt = now
+    return true
   }
 
   private func claimedPurpose(for pressTarget: TargetSnapshot, attemptID: UUID) -> SessionPurpose {
@@ -1106,6 +1450,23 @@ private final class RecognitionOperationSlot: ASRTranscriptionOperation {
   private var isCancelled = false
 
   func adopt(_ operation: ASRTranscriptionOperation) {
+    self.operation = operation
+    if isCancelled {
+      operation.cancel()
+    }
+  }
+
+  func cancel() {
+    isCancelled = true
+    operation?.cancel()
+  }
+}
+
+private final class FormattingOperationSlot: FormattingOperation {
+  private var operation: FormattingOperation?
+  private var isCancelled = false
+
+  func adopt(_ operation: FormattingOperation) {
     self.operation = operation
     if isCancelled {
       operation.cancel()

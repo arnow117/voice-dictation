@@ -39,9 +39,8 @@ printf '%s\n' "$entitlements" | grep -Fq "com.apple.security.device.audio-input"
   || fail "unexpected bundle identifier"
 [ "$(plist_value CFBundleShortVersionString)" = "0.1.0" ] \
   || fail "unexpected short version"
-BUNDLE_VERSION="$(plist_value CFBundleVersion)"
-[[ "$BUNDLE_VERSION" =~ ^[1-9][0-9]{0,3}\.[0-9]{1,2}\.[0-9]{1,2}$ ]] \
-  || fail "invalid bundle version"
+[ "$(plist_value CFBundleVersion)" = "1.0.4" ] \
+  || fail "expected beta.2 bundle version 1.0.4"
 [ -n "$(plist_value ShanshuoBuildTimestamp)" ] || fail "missing build timestamp"
 
 if /usr/libexec/PlistBuddy -c "Print :ShanshuoDevModelDir" "$INFO_PLIST" >/dev/null 2>&1; then

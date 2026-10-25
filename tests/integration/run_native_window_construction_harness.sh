@@ -36,6 +36,11 @@ swiftc -swift-version 5 -target arm64-apple-macos14.0 -module-cache-path "$WORK/
   "$ROOT/app/Shanshuo/Platform/SystemState.swift" \
   "$ROOT/app/Shanshuo/Platform/TextInsertionOperation.swift" \
   "$ROOT/app/Shanshuo/Platform/TextInserter.swift" \
+  "$ROOT/app/Shanshuo/Formatting/FormattingService.swift" \
+  "$ROOT/app/Shanshuo/Formatting/FormattingConfigurationStore.swift" \
+  "$ROOT/app/Shanshuo/Formatting/FormattingCredentialStore.swift" \
+  "$ROOT/app/Shanshuo/Formatting/CCSwitchMiniMaxImporter.swift" \
+  "$ROOT/app/Shanshuo/UI/FormattingSettingsWindowController.swift" \
   "$ROOT/app/Shanshuo/UI/HistoryWindowController.swift" \
   "$ROOT/app/Shanshuo/UI/ModelManagementWindowController.swift" \
   "$ROOT/app/Shanshuo/UI/OnboardingWindowController.swift" \

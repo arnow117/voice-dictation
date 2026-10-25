@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "status": "frozen_before_first_provider_request",
+  "frozen_at": "2026-10-23T07:10:02Z",
+  "public_synthetic_fixture_count": 60,
+  "maximum_input_characters": 200,
+  "runtime_system_prompt_sha256": "df940561e2c04c103eebeaf0a534cb5d7aa80e8c60de1ebdb4bcd1b1f79ab190",
+  "formatting_rules_sha256": "8064221f9f89a0a2496b536d6f1721a76b09b376c3ad7ebf73bd39fa3e47057f",
+  "heldout_fixture_sha256": "731bde910b97789836f1df6b10afcc419a26d87717a88bc4b701b4b85fd0c81c",
+  "rubric_sha256": "f0fc67ad39b2be1117b8da33ecb24b2d8a6ca74c12c4ad858c90b056841385b8",
+  "scorer_sha256": "57970bdc2cef65840c3098a9b1c18779cedc14fe87fbbc2defae15f410603934"
+}

@@ -7,6 +7,26 @@ import ShanshuoCore
 enum CLI {
   private static var outHandle: FileHandle?
 
+  static func help() -> Int32 {
+    print(
+      """
+      Usage:
+        Shanshuo --transcribe a.wav [b.wav ...] [--model-dir D] [--threads N] [--hotwords a,b] [--out f.jsonl]
+        Shanshuo --formatting-public-sample <correction|list>
+        Shanshuo --formatting-public-eval --out <result.jsonl>
+
+      Formatting commands never accept an API key or arbitrary dictation text. Import is explicit,
+      reads one MiniMax provider from the current user's CC Switch database into this process only,
+      and clears that credential when the command exits. The menu-bar app uses the same session-only
+      behavior after an explicit import or manual secure input.
+      The public sample command sends only the named built-in fixture through the production formatter.
+      The public evaluation command reads only bench/formatting/heldout.jsonl from the current
+      checkout and writes public raw-provider and post-guard results to the requested output file.
+      """
+    )
+    return 0
+  }
+
   static func transcribe(_ args: [String]) -> Int32 {
     var files: [String] = []
     var modelDir = Paths.modelDir

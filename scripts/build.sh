@@ -1,9 +1,9 @@
 #!/bin/bash
 # Build Shanshuo.app without an Xcode project (FEAT-001 ED-017).
 #
-# Public source defaults to an ad-hoc development build. A release build must
-# explicitly unlock and use the project's existing test-signing identity:
-#   CONFIG=release SHANSHUO_SIGNING_DIR=/secure/signing bash scripts/build.sh
+# Public source defaults to an ad-hoc development build. A release build uses an already-unlocked
+# project test-signing keychain and never supplies a password from this script:
+#   CONFIG=release SHANSHUO_SIGNING_KEYCHAIN=/secure/signing.keychain-db bash scripts/build.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -14,7 +14,7 @@ CONFIG="${CONFIG:-dev}"
 VENDOR="$ROOT/Vendor/sherpa-onnx"
 TARGET=arm64-apple-macos14.0
 VERSION=0.1.0
-BUNDLE_VERSION=1.0.2
+BUNDLE_VERSION=1.0.4
 BUILD_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 RELEASE_SIGNING_IDENTITY="Shanshuo Test Signing"
 OBJ="$OUT/obj"
@@ -111,27 +111,23 @@ swiftc -O -swift-version 5 -target "$TARGET" -module-cache-path "$OUT/.mc" \
   -lkaldi-native-fbank-core -lkissfft-float -lssentencepiece_core -lonnxruntime \
   -lsqlite3 -lc++ -framework AppKit -framework Carbon -framework ApplicationServices \
   -framework AVFoundation -framework Accelerate -framework CoreML -framework CryptoKit \
-  -framework Foundation "${SRCS[@]}" -o "$STAGE/Contents/MacOS/Shanshuo"
+  -framework Foundation -framework Security "${SRCS[@]}" -o "$STAGE/Contents/MacOS/Shanshuo"
 
 sign_bundle() {
   local signing_identity
   local signing_keychain=""
-  local signing_password_file=""
   local codesign_keychain_args=()
 
   if [ "$CONFIG" = release ]; then
     signing_identity="${SHANSHUO_SIGNING_IDENTITY:-$RELEASE_SIGNING_IDENTITY}"
     signing_keychain="${SHANSHUO_SIGNING_KEYCHAIN:-${SHANSHUO_SIGNING_DIR:-$MAIN/.work/signing}/shanshuo-signing.keychain-db}"
-    signing_password_file="${SHANSHUO_SIGNING_PASSWORD_FILE:-${SHANSHUO_SIGNING_DIR:-$MAIN/.work/signing}/keychain-password}"
 
     if [ "$signing_identity" != "$RELEASE_SIGNING_IDENTITY" ] \
-      || [ ! -r "$signing_keychain" ] \
-      || [ ! -r "$signing_password_file" ]; then
+      || [ ! -r "$signing_keychain" ]; then
       echo "release signing configuration is unavailable" >&2
       exit 2
     fi
 
-    security unlock-keychain -p "$(cat "$signing_password_file")" "$signing_keychain"
     codesign_keychain_args=(--keychain "$signing_keychain")
   else
     signing_identity="${SHANSHUO_SIGNING_IDENTITY:--}"

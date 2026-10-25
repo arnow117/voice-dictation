@@ -13,6 +13,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSMe
   private let openAccessibilitySettings: () -> Void
   private let openKeyboardSettings: () -> Void
   private let openModelManagement: () -> Void
+  private let openFormattingSettings: () -> Void
   private let openHistory: () -> Void
   private let openPrivacy: () -> Void
   private let performanceDiagnostics: PerformanceEventRecording?
@@ -43,6 +44,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSMe
     target: nil,
     action: nil
   )
+  private let formattingStatus = NSTextField(
+    wrappingLabelWithString: "智能整理默认关闭；开启前需完成连接测试和数据流向确认。"
+  )
+  private let formattingButton = NSButton(title: "管理智能整理…", target: nil, action: nil)
   private let historyStatus = NSTextField(wrappingLabelWithString: "")
   private let historyButton = NSButton(title: "语音输入历史…", target: nil, action: nil)
   private let privacyStatus = NSTextField(wrappingLabelWithString: "")
@@ -62,6 +67,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSMe
     openAccessibilitySettings: @escaping () -> Void,
     openKeyboardSettings: @escaping () -> Void,
     openModelManagement: @escaping () -> Void,
+    openFormattingSettings: @escaping () -> Void,
     openHistory: @escaping () -> Void,
     openPrivacy: @escaping () -> Void,
     performanceDiagnostics: PerformanceEventRecording? = nil
@@ -70,12 +76,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSMe
     self.openAccessibilitySettings = openAccessibilitySettings
     self.openKeyboardSettings = openKeyboardSettings
     self.openModelManagement = openModelManagement
+    self.openFormattingSettings = openFormattingSettings
     self.openHistory = openHistory
     self.openPrivacy = openPrivacy
     self.performanceDiagnostics = performanceDiagnostics
 
     let window = NSWindow(
-      contentRect: NSRect(x: 0, y: 0, width: 620, height: 580),
+      contentRect: NSRect(x: 0, y: 0, width: 620, height: 680),
       styleMask: [.titled, .closable, .miniaturizable],
       backing: .buffered,
       defer: false
@@ -213,17 +220,22 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSMe
     integrationTitle.font = .systemFont(ofSize: 17, weight: .semibold)
     modelManagementButton.target = self
     modelManagementButton.action = #selector(openModelManagementAction)
+    formattingButton.target = self
+    formattingButton.action = #selector(openFormattingSettingsAction)
     historyButton.target = self
     historyButton.action = #selector(openHistoryAction)
     privacyButton.target = self
     privacyButton.action = #selector(openPrivacyAction)
     modelManagementButton.setAccessibilityLabel("打开语音模型管理")
+    formattingButton.setAccessibilityLabel("打开智能整理设置")
     historyButton.setAccessibilityLabel("打开语音输入历史")
     privacyButton.setAccessibilityLabel("打开隐私说明")
     modelStatus.maximumNumberOfLines = 0
+    formattingStatus.maximumNumberOfLines = 0
     historyStatus.maximumNumberOfLines = 0
     privacyStatus.maximumNumberOfLines = 0
     modelStatus.textColor = .secondaryLabelColor
+    formattingStatus.textColor = .secondaryLabelColor
     historyStatus.textColor = .secondaryLabelColor
     privacyStatus.textColor = .secondaryLabelColor
 
@@ -239,6 +251,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSMe
     stack.addArrangedSubview(integrationTitle)
     stack.addArrangedSubview(modelStatus)
     stack.addArrangedSubview(modelManagementButton)
+    stack.addArrangedSubview(formattingStatus)
+    stack.addArrangedSubview(formattingButton)
     stack.addArrangedSubview(historyStatus)
     stack.addArrangedSubview(historyButton)
     stack.addArrangedSubview(privacyStatus)
@@ -329,6 +343,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
     if responder === modelManagementButton {
       return .modelManagementButton
+    }
+    if responder === formattingButton {
+      return .other
     }
     if responder === historyButton {
       return .historyButton
@@ -526,6 +543,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSMe
 
   @objc private func openModelManagementAction() {
     openModelManagement()
+  }
+
+  @objc private func openFormattingSettingsAction() {
+    openFormattingSettings()
   }
 
   @objc private func openHistoryAction() {
