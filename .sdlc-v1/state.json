@@ -194,11 +194,11 @@
       },
       "requirement_id": "REQ-002",
       "review": {
-        "at": null,
-        "by": null,
-        "decision": "pending"
+        "at": "2026-10-25T03:17:21Z",
+        "by": "beta2_review",
+        "decision": "approved"
       },
-      "status": "in_progress",
+      "status": "reviewed",
       "tasks": {
         "T001": {
           "depends_on": [],
@@ -226,12 +226,12 @@
           "updated_at": "2026-10-25T03:13:32Z"
         }
       },
-      "updated_at": "2026-10-25T03:13:32Z",
+      "updated_at": "2026-10-25T03:17:21Z",
       "validation": {
-        "at": null,
-        "command": null,
-        "commit": null,
-        "result": "pending"
+        "at": "2026-10-25T03:15:09Z",
+        "command": "bash scripts/release/verify_archives.sh .work/minimax/beta2-review-fixed-release/Shanshuo-v0.1.0-beta.2-macos-arm64.zip .work/minimax/beta2-review-fixed-release/Shanshuo-v0.1.0-beta.2-macos-arm64.dmg .work/minimax/beta2-review-fixed-release/SHA256SUMS.txt",
+        "commit": "7e3d7af3a85504fe39e2371b7b4f227c43cbecb8",
+        "result": "pass"
       }
     }
   },
@@ -260,9 +260,9 @@
       "id": "REQ-002",
       "priority": "P1",
       "product_context_ref": ".sdlc-v1/context/REQ-002.product.md",
-      "status": "in_delivery",
+      "status": "validated",
       "title": "识别文本书面化与结构化整理（MiniMax）",
-      "updated_at": "2026-10-25T03:13:32Z"
+      "updated_at": "2026-10-25T03:17:21Z"
     },
     "REQ-003": {
       "created_at": "2026-10-21T11:25:28Z",

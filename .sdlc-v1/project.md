@@ -34,7 +34,7 @@
 |---|---|---|
 | 启动 | `open <main checkout>/.work/build/Shanshuo.app` | 构建产物在主 checkout 的 `.work/build/`，不入库 |
 | 主流程 | `AppDelegate` → `DictationCoordinator` → 平台协议适配器、`Qwen3ASRService` → `Qwen3ChunkDecoder` / `Qwen3Recognizer` | Coordinator 为主线程会话所有者；ASR 在唯一 userInitiated 串行队列加载、使用与卸载（ED-002、ED-014，源码 `500ec4c`） |
-| 配置 | `Info.plist` 由 `scripts/build.sh` 生成；release 省略 `ShanshuoDevModelDir`。已发布 beta.1 为 `0.1.0/1.0.2`，FEAT-002 beta.2 目标为 `0.1.0/1.0.3`，时间另存 `ShanshuoBuildTimestamp`；环境变量 `SHANSHUO_MODEL_DIR` 只供开发测试覆盖 | 不含 secret；新候选实际构建/安装证据见 FEAT-002 |
+| 配置 | `Info.plist` 由 `scripts/build.sh` 生成；release 省略 `ShanshuoDevModelDir`。已发布 beta.1 为 `0.1.0/1.0.2`，FEAT-002 beta.2 目标为 `0.1.0/1.0.4`，时间另存 `ShanshuoBuildTimestamp`；环境变量 `SHANSHUO_MODEL_DIR` 只供开发测试覆盖 | 不含 secret；新候选实际构建/安装证据见 FEAT-002 |
 | 身份、权限或外部凭据 | 公共源码默认 ad-hoc 开发构建，可指定自己的签名身份；项目 release 显式使用既有 "Shanshuo Test Signing"，通过 `SHANSHUO_SIGNING_DIR` 或独立 keychain/password-file 路径提供本地资源 | 私钥和密码文件不入库，缺失 release 签名配置必须失败 |
 
 ## 常用命令
