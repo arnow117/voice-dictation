@@ -2,14 +2,17 @@ import AppKit
 
 final class PrivacyWindowController: NSWindowController {
   private let model: AppModel
+  private let formattingConfigurationStore: FormattingConfigurationStore
   private let textLabel = NSTextField(wrappingLabelWithString: "")
   private var observation: UUID?
+  private var formattingObservation: UUID?
   private var latestSnapshot: AppStatusSnapshot?
 
-  init(model: AppModel) {
+  init(model: AppModel, formattingConfigurationStore: FormattingConfigurationStore) {
     self.model = model
+    self.formattingConfigurationStore = formattingConfigurationStore
     let window = NSWindow(
-      contentRect: NSRect(x: 0, y: 0, width: 540, height: 280),
+      contentRect: NSRect(x: 0, y: 0, width: 540, height: 380),
       styleMask: [.titled, .closable, .miniaturizable],
       backing: .buffered,
       defer: false
@@ -26,6 +29,12 @@ final class PrivacyWindowController: NSWindowController {
       }
       self?.render(snapshot)
     }
+    formattingObservation = formattingConfigurationStore.observe { [weak self] _ in
+      guard let self, let latestSnapshot = self.latestSnapshot, self.window?.isVisible == true else {
+        return
+      }
+      self.render(latestSnapshot)
+    }
   }
 
   required init?(coder: NSCoder) {
@@ -35,6 +44,9 @@ final class PrivacyWindowController: NSWindowController {
   deinit {
     if let observation {
       model.removeObserver(observation)
+    }
+    if let formattingObservation {
+      formattingConfigurationStore.removeObserver(formattingObservation)
     }
   }
 
@@ -68,10 +80,13 @@ final class PrivacyWindowController: NSWindowController {
       return
     }
     let historyState = snapshot.historyEnabled ? "已开启" : "已关闭"
+    let formatting = formattingConfigurationStore.snapshot()
+    let formattingState = formatting.enabled ? "已开启" : "默认关闭"
     textLabel.stringValue = """
       语音音频只保留在内存中，并在本次会话结束、取消或中断时丢弃。
 
-      识别使用本机 Qwen3-ASR 模型完成，不会上传音频或文本。本版本不提供云端整理功能，也不发送遥测。
+      识别使用本机 Qwen3-ASR 模型完成，不会上传音频。智能整理当前\(formattingState)：只有你在“智能整理”中完成连接测试、确认数据流向并开启后，本次识别文字才会发送给 MiniMax 的所选服务端点。音频、屏幕内容和其他应用内容不会发送。Key 只在本次运行内存中有效，退出后会清除。应用不承诺 MiniMax 零数据保留；数据政策入口：
+      \(formatting.endpoint.privacyPolicyURL.absoluteString)
 
       为定位本机性能问题，应用会在本机保存有界的性能事件：随机会话标识、固定事件/结果、单调时间和音频时长。它不包含听写内容、窗口或应用名称、剪贴板、网址、路径或错误详情，也不会上传。
 

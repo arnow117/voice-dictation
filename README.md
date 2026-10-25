@@ -1,13 +1,13 @@
 # 闪说
 
-macOS 桌面端语音输入：在任意应用中按住快捷键说话，松开后由本地模型识别中英文，并安全地插入或复制到当前输入框。书面化、结构化整理和词典属于后续的 REQ-002、REQ-003。
+macOS 桌面端语音输入：在任意应用中按住快捷键说话，松开后由本地模型识别中英文，并安全地插入或复制到当前输入框。`v0.1.0-beta.2` 本地候选还提供默认关闭、需知情开启的 MiniMax 智能整理；个人词典仍属于后续 REQ-003。
 
 ## 需求
 
 | ID | 内容 | 优先级 | 依赖 | 状态 | 产品上下文 |
 |---|---|---|---|---|---|
 | REQ-001 | 核心闭环：Onboarding 与权限引导、按住说话、本地中英识别、插入当前输入框、录音提示与隐私 | P0 | — | v0.1.0-beta.1；限制见已知问题，发布状态以 SDLC 记录为准 | [REQ-001.product.md](.sdlc-v1/context/REQ-001.product.md) |
-| REQ-002 | 识别文本书面化与结构化整理（MiniMax，尚未接入） | P1 | REQ-001 | Spec 已完成，待 REQ-001 发布后进入 plan | [REQ-002.product.md](.sdlc-v1/context/REQ-002.product.md) |
+| REQ-002 | 识别文本书面化与结构化整理（MiniMax） | P1 | REQ-001 | beta.2 实验功能已在本机安装并通过基本听写；v2 EVAL 为 PARTIAL，按 DEC-013 保留限制，独立验收与发布状态见 SDLC | [REQ-002.product.md](.sdlc-v1/context/REQ-002.product.md) |
 | REQ-003 | 专有词与个人词典 | P1 | REQ-001 | Spec，静默学习细则 OPEN-003 待确认 | [REQ-003.product.md](.sdlc-v1/context/REQ-003.product.md) |
 
 调研资料：[本地中英文 ASR 模型选型笔记](research/asr-model-selection.md)、[plan 阶段复用候选与 macOS 平台调研](research/plan-reuse-and-platform-notes.md)。
@@ -17,6 +17,7 @@ macOS 桌面端语音输入：在任意应用中按住快捷键说话，松开�
 | Feature | Requirement | 状态 | 研发上下文 |
 |---|---|---|---|
 | FEAT-001 闪说核心闭环 | REQ-001 | 核心实现与安装候选已完成；验证、评审和发布状态见 SDLC 记录 | [FEAT-001.engineering.md](.sdlc-v1/context/FEAT-001.engineering.md) |
+| FEAT-002 MiniMax 智能整理 | REQ-002 | 本机实验候选已可用；正式质量/速度目标继续跟踪，验证、评审及公开发布状态见 SDLC | [FEAT-002.engineering.md](.sdlc-v1/context/FEAT-002.engineering.md) |
 
 ## 交互原型
 
@@ -34,11 +35,23 @@ macOS 桌面端语音输入：在任意应用中按住快捷键说话，松开�
 
 ## 安装测试版
 
-`v0.1.0-beta.1` 提供 arm64 的 ZIP、DMG 和 `SHA256SUMS.txt`；应用版本为 `0.1.0`。下载见 [测试版发布页](https://github.com/arnow117/voice-dictation/releases/tag/v0.1.0-beta.1)。测试版使用项目测试签名，未经过 Apple 公证，首次打开可能需要在 macOS“隐私与安全性”中明确允许。安装步骤、权限说明和模型下载行为见 [安装说明](docs/install.md)，未完成验证与质量限制见 [已知问题](docs/known-issues.md)。
+公开可下载版本仍是 `v0.1.0-beta.1`，提供 arm64 的 ZIP、DMG 和 `SHA256SUMS.txt`；应用版本为 `0.1.0`。下载见 [测试版发布页](https://github.com/arnow117/voice-dictation/releases/tag/v0.1.0-beta.1)。`v0.1.0-beta.2` 是独立的本地候选，使用同一 marketing version、构建版本 `1.0.3`，尚未创建公开 Release，也不覆盖 beta.1 资产。候选使用项目测试签名，未经过 Apple 公证，首次打开可能需要在 macOS“隐私与安全性”中明确允许。安装步骤、权限说明和模型下载行为见 [安装说明](docs/install.md)，未完成验证与质量限制见 [已知问题](docs/known-issues.md)。
 
-当前安装包只含 REQ-001 的本地听写。MiniMax 是后续 REQ-002 整理的已选方向，尚未接入应用或安装包；个人词典也尚未接入。
+beta.1 只含 REQ-001 的本地听写；beta.2 候选接入了 REQ-002 的可选 MiniMax 整理。个人词典尚未接入。
 
 已确认的兼容性限制：本安装版在备忘录可正常听写输入；Codex 聊天输入框尚不能自动写入，可先在备忘录听写后手动复制。完整矩阵和后续项见已知问题清单。
+
+## 智能整理（beta.2 实验功能）
+
+普通使用者从菜单栏“智能整理…”或“设置… > 智能整理”进入。功能默认关闭：在数据流向确认前，设置只说明会发送本次识别文字给所选 MiniMax 服务，不会发送音频、屏幕内容或其他应用内容，并提供端点对应的数据政策入口。应用不承诺零数据保留。
+
+确认后，使用者可以显式一次性从本机 CC Switch 导入，或在安全输入框输入自己的 Key。Key 只在本次运行内存中有效，退出后会清除；日常整理与连接测试不读取 CC Switch 数据库，界面只显示掩码。下次启动需要重新导入、测试并开启。选择 `MiniMax-M3.1-Flash`（low effort）或 `MiniMax-M3` 后，运行只使用固定公开文字的连接测试，再明确开启功能。Flash low 是当前评测候选，尚不是经完整 EVAL 确定的默认推荐。
+
+开启后，听写按下时会固定本次模式和配置。正常时，应用在插入前整理识别文字，并在已开启的历史中分别保存原文和最终文本。这覆盖 [SCN-013～SCN-015 的配置、列表/改口和回退场景](.sdlc-v1/context/REQ-002.product.md)。关闭功能、替换 Key、切换模型或端点会让旧整理失效，仍有效的会话最多一次交付原文；网络、Key、额度、限流、超时或结果校验失败也会如实交付原文并显示固定原因。按 Esc、进入安全输入框、锁屏、暂停或撤销本次会话所需权限会丢弃整次会话，不插入、复制或写历史。
+
+验证人员可运行候选：`Shanshuo --formatting-public-eval --out <result.jsonl>`。该显式入口只读一次当前用户的 CC Switch MiniMax 配置，并只在该进程内使用 Key；它只读取 checkout 中的 60 条公开合成夹具，不接收 Key 或任意听写文本。入口记录公开 raw 可见文本和 guard 后的最终文本，由 [公开 rubric 与 scorer](bench/formatting/) 计算结果。
+
+旧的 v1 规则、语料、rubric、scorer 和冻结清单保留在 [v1 基线](bench/formatting/v1/)。一次有界规则修正后的 v2 批次有 60 条结果、51 条有效、42 条正确（82.35%）、9 条超时，最终和 raw 自动保真错误各 1，所有用户可感知延迟 P50/P95 为 2175/5001 ms。因此 v2 仍为 PARTIAL，未达到 ≥95%、零自动保真错误和 1 秒/2.5 秒目标；完整冻结与人工归因见 [v2 评测记录](docs/validation/minimax-formatting-v2.md)。本次按 DEC-013 交付默认关闭的实验功能，正式目标继续由 [Issue #2](https://github.com/arnow117/voice-dictation/issues/2) 跟踪。安装版 `0.1.0/1.0.3` 已完成原生导入、连接和开启，用户在备忘录用 Fn 实际生成保留前文的编号列表；该单次基本流程不等于完整端到端性能分布通过。
 
 ## 当前核心闭环（开发构建）
 

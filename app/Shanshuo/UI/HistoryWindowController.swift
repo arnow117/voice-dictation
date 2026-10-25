@@ -7,7 +7,8 @@ final class HistoryWindowController: NSWindowController, NSTableViewDataSource, 
   private let historyEnabledButton = NSButton(
     checkboxWithTitle: "保存语音输入历史（默认保留 7 天）", target: nil, action: nil)
   private let statusLabel = NSTextField(wrappingLabelWithString: "")
-  private let copyButton = NSButton(title: "复制", target: nil, action: nil)
+  private let copyOriginalButton = NSButton(title: "复制原文", target: nil, action: nil)
+  private let copyFinalButton = NSButton(title: "复制最终文本", target: nil, action: nil)
   private let deleteButton = NSButton(title: "删除", target: nil, action: nil)
   private let clearButton = NSButton(title: "清空全部…", target: nil, action: nil)
   private let retryButton = NSButton(title: "重试", target: nil, action: nil)
@@ -19,7 +20,7 @@ final class HistoryWindowController: NSWindowController, NSTableViewDataSource, 
   init(model: AppModel) {
     self.model = model
     let window = NSWindow(
-      contentRect: NSRect(x: 0, y: 0, width: 680, height: 420),
+      contentRect: NSRect(x: 0, y: 0, width: 840, height: 420),
       styleMask: [.titled, .closable, .miniaturizable],
       backing: .buffered,
       defer: false
@@ -88,12 +89,16 @@ final class HistoryWindowController: NSWindowController, NSTableViewDataSource, 
     let appColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("app"))
     appColumn.title = "目标应用"
     appColumn.width = 120
-    let textColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("text"))
-    textColumn.title = "文本"
-    textColumn.width = 360
+    let originalColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("original"))
+    originalColumn.title = "原文"
+    originalColumn.width = 260
+    let finalColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("final"))
+    finalColumn.title = "最终文本"
+    finalColumn.width = 260
     tableView.addTableColumn(timeColumn)
     tableView.addTableColumn(appColumn)
-    tableView.addTableColumn(textColumn)
+    tableView.addTableColumn(originalColumn)
+    tableView.addTableColumn(finalColumn)
     tableView.dataSource = self
     tableView.delegate = self
     tableView.usesAlternatingRowBackgroundColors = true
@@ -104,9 +109,12 @@ final class HistoryWindowController: NSWindowController, NSTableViewDataSource, 
     scrollView.borderType = .bezelBorder
     scrollView.translatesAutoresizingMaskIntoConstraints = false
 
-    copyButton.target = self
-    copyButton.action = #selector(copySelected)
-    copyButton.setAccessibilityLabel("复制选中的历史文本")
+    copyOriginalButton.target = self
+    copyOriginalButton.action = #selector(copyOriginal)
+    copyOriginalButton.setAccessibilityLabel("复制选中的历史原文")
+    copyFinalButton.target = self
+    copyFinalButton.action = #selector(copyFinal)
+    copyFinalButton.setAccessibilityLabel("复制选中的历史最终文本")
     deleteButton.target = self
     deleteButton.action = #selector(deleteSelected)
     deleteButton.setAccessibilityLabel("删除选中的历史记录")
@@ -117,7 +125,9 @@ final class HistoryWindowController: NSWindowController, NSTableViewDataSource, 
     retryButton.action = #selector(retryLastOperation)
     retryButton.setAccessibilityLabel("重试失败的历史操作")
     retryButton.isHidden = true
-    let buttons = NSStackView(views: [copyButton, deleteButton, clearButton, retryButton])
+    let buttons = NSStackView(
+      views: [copyOriginalButton, copyFinalButton, deleteButton, clearButton, retryButton]
+    )
     buttons.orientation = .horizontal
     buttons.spacing = 8
 
@@ -152,7 +162,15 @@ final class HistoryWindowController: NSWindowController, NSTableViewDataSource, 
     model.setHistoryEnabled(historyEnabledButton.state == .on)
   }
 
-  @objc private func copySelected() {
+  @objc private func copyOriginal() {
+    guard let record = selectedRecord() else {
+      return
+    }
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(record.recognizedText, forType: .string)
+  }
+
+  @objc private func copyFinal() {
     guard let record = selectedRecord() else {
       return
     }
@@ -285,6 +303,8 @@ final class HistoryWindowController: NSWindowController, NSTableViewDataSource, 
       )
     case "app":
       field.stringValue = record.targetAppName ?? record.targetBundleID ?? "未知应用"
+    case "original":
+      field.stringValue = record.recognizedText
     default:
       field.stringValue = record.finalText
     }

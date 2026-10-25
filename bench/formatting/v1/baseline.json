@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "baseline": "v1",
+  "source_freeze": "../freeze.json",
+  "artifacts": {
+    "formatting_rules_sha256": "8064221f9f89a0a2496b536d6f1721a76b09b376c3ad7ebf73bd39fa3e47057f",
+    "heldout_fixture_sha256": "731bde910b97789836f1df6b10afcc419a26d87717a88bc4b701b4b85fd0c81c",
+    "rubric_sha256": "f0fc67ad39b2be1117b8da33ecb24b2d8a6ca74c12c4ad858c90b056841385b8",
+    "scorer_sha256": "57970bdc2cef65840c3098a9b1c18779cedc14fe87fbbc2defae15f410603934"
+  },
+  "purpose": "immutable pre-v2 prompt, guard, corpus, rubric, and scorer baseline"
+}

@@ -4,8 +4,19 @@ import ShanshuoCore
 // `--transcribe` is an explicit developer/test entry point. The menu-bar application never writes
 // recognized text to diagnostics or standard output.
 let arguments = CommandLine.arguments
-if arguments.count > 1, arguments[1] == "--transcribe" {
-  exit(CLI.transcribe(Array(arguments.dropFirst(2))))
+if arguments.count > 1 {
+  switch arguments[1] {
+  case "--help":
+    exit(CLI.help())
+  case "--transcribe":
+    exit(CLI.transcribe(Array(arguments.dropFirst(2))))
+  case "--formatting-public-sample":
+    exit(FormattingCLI.runPublicSample(Array(arguments.dropFirst(2))))
+  case "--formatting-public-eval":
+    exit(FormattingCLI.runPublicEvaluation(Array(arguments.dropFirst(2))))
+  default:
+    break
+  }
 }
 
 let app = NSApplication.shared
@@ -37,6 +48,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   )
   private let hotkeys = SystemHotkeyMonitor()
   private let soundPlayer = SystemRecordingSoundPlayer()
+  private let formattingConfigurationStore = FormattingConfigurationStore()
+  private let formattingCredentialStore = FormattingCredentialStore()
+  private lazy var formatter = MiniMaxAPIFormatter(credentialStore: formattingCredentialStore)
   private var recognizer: Qwen3ASRService!
   private var coordinator: DictationCoordinator!
   private var modelManager: ModelManager?
@@ -44,9 +58,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private var onboardingWindowController: OnboardingWindowController?
   private var historyWindowController: HistoryWindowController?
   private var privacyWindowController: PrivacyWindowController?
+  private var formattingSettingsWindowController: FormattingSettingsWindowController?
   private var settingsWindowController: SettingsWindowController?
   private var appModel: AppModel?
   private var modelObservation: UUID?
+  private var formattingObservation: UUID?
   private var didRecordColdStartReady = false
 
   func applicationDidFinishLaunching(_ notification: Notification) {
@@ -90,11 +106,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       recognizer: recognizer,
       textInserter: inserter,
       hotkeys: hotkeys,
+      formatter: formatter,
+      formattingConfiguration: formattingConfigurationStore.snapshot(),
       performanceDiagnostics: performanceDiagnostics,
       onSessionOutcome: { [weak self] outcome in
         self?.appModel?.handleSessionOutcome(outcome)
       }
     )
+    formattingObservation = formattingConfigurationStore.observe { [weak self] snapshot in
+      self?.coordinator.updateFormattingConfiguration(snapshot)
+    }
     hotkeys.onHold = { [weak self] shortcut, isPressed in
       self?.coordinator.hotkeyChanged(shortcut, isPressed: isPressed)
       self?.appModel?.recordHotkeyEvent(shortcut, isPressed: isPressed)
@@ -131,6 +152,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     if let modelObservation {
       modelManager?.removeObserver(modelObservation)
     }
+    if let formattingObservation {
+      formattingConfigurationStore.removeObserver(formattingObservation)
+    }
     performanceDiagnostics.flush()
   }
 
@@ -155,6 +179,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     )
     manageModelItem.target = self
     menu.addItem(manageModelItem)
+    let formattingItem = NSMenuItem(
+      title: "智能整理…",
+      action: #selector(openFormattingSettings),
+      keyEquivalent: ""
+    )
+    formattingItem.target = self
+    menu.addItem(formattingItem)
     let settingsItem = NSMenuItem(title: "设置…", action: #selector(openSettings), keyEquivalent: ",")
     settingsItem.target = self
     menu.addItem(settingsItem)
@@ -236,12 +267,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         practiceDiagnostics: performanceDiagnostics
       )
       historyWindowController = HistoryWindowController(model: appModel)
-      privacyWindowController = PrivacyWindowController(model: appModel)
+      privacyWindowController = PrivacyWindowController(
+        model: appModel,
+        formattingConfigurationStore: formattingConfigurationStore
+      )
+      formattingSettingsWindowController = FormattingSettingsWindowController(
+        configurationStore: formattingConfigurationStore,
+        credentialStore: formattingCredentialStore,
+        formatter: formatter
+      )
       settingsWindowController = SettingsWindowController(
         model: appModel,
         openAccessibilitySettings: { [weak self] in self?.openAccessibilitySettings() },
         openKeyboardSettings: { [weak self] in self?.openKeyboardSettings() },
         openModelManagement: { [weak self] in self?.openModelManagement() },
+        openFormattingSettings: { [weak self] in self?.openFormattingSettings() },
         openHistory: { [weak self] in self?.openHistory() },
         openPrivacy: { [weak self] in self?.openPrivacy() },
         performanceDiagnostics: performanceDiagnostics
@@ -371,6 +411,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   @objc private func openSettings() {
     settingsWindowController?.showWindow(nil)
+  }
+
+  @objc private func openFormattingSettings() {
+    formattingSettingsWindowController?.showWindow(nil)
   }
 
   @objc private func openHistory() {

@@ -1,0 +1,28 @@
+{
+  "schema_version": 2,
+  "evaluation_version": "v2",
+  "category_counts": {
+    "list": 15,
+    "cleanup_correction": 15,
+    "layout_numbers": 10,
+    "fidelity_injection": 10,
+    "unchanged": 10
+  },
+  "fixture_constraints": {
+    "maximum_input_characters": 200,
+    "public_synthetic_only": true,
+    "no_v1_input_or_expected_text_reuse": true
+  },
+  "text_equivalence": {
+    "punctuation_variants": "allowed",
+    "acceptable_variants_field": "Only whole-sentence variants declared in a fixture before the provider request are accepted.",
+    "answer_or_fact_changes": "rejected"
+  },
+  "thresholds": {
+    "minimum_valid_cases": 60,
+    "minimum_accuracy_percent": 95,
+    "maximum_final_fidelity_errors": 0,
+    "maximum_p50_ms": 1000,
+    "maximum_p95_ms": 2500
+  }
+}

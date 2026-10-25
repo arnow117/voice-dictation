@@ -8,3 +8,4 @@ __pycache__/
 bench/asr/results/*/*.log
 Vendor/sherpa-onnx/lib/
 .vendor-cache/
+Packages/ShanshuoCore/.build/

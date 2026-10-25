@@ -1,0 +1,14 @@
+{
+  "schema_version": 2,
+  "evaluation_version": "v2",
+  "status": "frozen_before_first_v2_provider_request",
+  "frozen_at": "2026-10-23T08:02:15Z",
+  "public_synthetic_fixture_count": 60,
+  "maximum_input_characters": 200,
+  "runtime_system_prompt_sha256": "9766e88edbe9fe0509a3eaaa31fbc9eb0ba0eaab8b55b2235764090a7ae3a181",
+  "formatting_rules_sha256": "cd312522ab1de7817f1e9f91ccecdba61309e0bfff21141a6523e7a4418e6a50",
+  "heldout_fixture_sha256": "e250bdc8495464254a21f4229ffae3418b477daff6b89155d26a91726da8c132",
+  "rubric_sha256": "2e9fa1f01e28a313955c174f8845fb2b5d8e1776185e66162cd533d6b8d4b90e",
+  "scorer_sha256": "7d06fef2482b04903cf11e6f9e99cae651871c4382ce5115899cc133a047d2c1",
+  "v1_baseline_manifest_sha256": "64a65758839d4c8346ae0d412b70d7889711c667c12a516383e80eed8090a294"
+}
