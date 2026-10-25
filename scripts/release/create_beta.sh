@@ -50,7 +50,7 @@ copy_distribution_documents() {
   cp "$ROOT/THIRD_PARTY_NOTICES.md" "$destination/THIRD_PARTY_NOTICES.md"
   cp "$ROOT/licenses/"* "$destination/licenses/"
   cat > "$destination/README.md" <<'EOF'
-# 闪说 v0.1.0-beta.2 本地候选
+# 闪说 v0.1.0-beta.2 测试版
 
 - [安装说明](docs/install.md)
 - [已知问题](docs/known-issues.md)

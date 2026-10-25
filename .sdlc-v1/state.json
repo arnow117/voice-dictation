@@ -223,10 +223,10 @@
           "id": "T003",
           "status": "done",
           "title": "冻结60条EVAL、当前使用说明与beta.2安装候选",
-          "updated_at": "2026-10-25T02:54:29Z"
+          "updated_at": "2026-10-25T03:13:32Z"
         }
       },
-      "updated_at": "2026-10-25T02:54:29Z",
+      "updated_at": "2026-10-25T03:13:32Z",
       "validation": {
         "at": null,
         "command": null,
@@ -262,7 +262,7 @@
       "product_context_ref": ".sdlc-v1/context/REQ-002.product.md",
       "status": "in_delivery",
       "title": "识别文本书面化与结构化整理（MiniMax）",
-      "updated_at": "2026-10-25T02:54:29Z"
+      "updated_at": "2026-10-25T03:13:32Z"
     },
     "REQ-003": {
       "created_at": "2026-10-21T11:25:28Z",

@@ -426,13 +426,18 @@ final class FormattingSettingsWindowController: NSWindowController, NSWindowDele
     guard matches(ticket: ticket, snapshot: configurationStore.snapshot()) else {
       return
     }
+    let formattingIsEnabled = configurationStore.snapshot().enabled
     if case .formatted = result, configurationStore.recordConnectionTestSuccess(ticket) {
       completedTestTicket = ticket
-      statusOverride = "连接测试成功。可以开启智能整理。"
+      statusOverride = formattingIsEnabled
+        ? "连接测试成功。智能整理保持开启。"
+        : "连接测试成功。可以开启智能整理。"
     } else if case .fallback(_, let reason) = result, reason == .authorizationFailed {
-      statusOverride = "Key 无效。请通过下方官方链接获取或更新 MiniMax API Key。"
+      let enabledStatus = formattingIsEnabled ? "智能整理仍保持开启。" : "智能整理仍保持关闭。"
+      statusOverride = "Key 无效。\(enabledStatus)请通过下方官方链接获取或更新 MiniMax API Key。"
     } else {
-      statusOverride = "连接测试未完成。智能整理仍保持关闭。"
+      let enabledStatus = formattingIsEnabled ? "智能整理仍保持开启。" : "智能整理仍保持关闭。"
+      statusOverride = "连接测试未完成。\(enabledStatus)"
     }
     render(configurationStore.snapshot())
   }

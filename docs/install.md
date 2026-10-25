@@ -1,6 +1,6 @@
 # 安装闪说测试版
 
-`v0.1.0-beta.1` 与 `v0.1.0-beta.2` 均面向 Apple silicon（arm64）和 macOS 14 及以上，安装包不含语音模型；首次使用时由应用下载并校验 Qwen3-ASR 0.6B（INT8）。具体可下载版本以项目 [Release 页面](https://github.com/arnow117/voice-dictation/releases) 为准。测试包使用项目测试签名，未经过 Apple 公证。
+`v0.1.0-beta.1` 与 `v0.1.0-beta.2` 均面向 Apple silicon（arm64）和 macOS 14 及以上，安装包不含语音模型；首次使用时由应用下载并校验 Qwen3-ASR 0.6B（INT8）。当前 beta.2 分发候选为 `0.1.0/1.0.4`；具体可下载版本以项目 [Release 页面](https://github.com/arnow117/voice-dictation/releases) 为准。测试包使用项目测试签名，未经过 Apple 公证。
 
 1. 下载 ZIP 或 DMG，并用同目录的 `SHA256SUMS.txt` 核对文件校验和。
 2. 解压 ZIP，或打开 DMG 后把 `Shanshuo.app` 拖到 `Applications`。DMG 内的 `Applications` 是快捷方式。

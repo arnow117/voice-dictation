@@ -135,6 +135,12 @@
 - **恢复与分工**：原实现worker在运行时中断后已不存在，已只读核对Git、状态和遗留日志。允许一个替代Terra worker仅完成已稳定依赖下可独立验收的T003打包/文档收尾；保留所有失败史、一次诊断已用及v2不再调参/重跑限制。完成后主Agent验收Task，继而独立验证、独立评审、发布准备与主Agent执行外部副作用。
 - **本轮检查**：已有最终SKIP_ASR完整日志到all checks passed；不因两天经过而无谓重跑云端模型或120条ASR。当前未修改的确定性证据可复用；新的分发文档、归档、签名及校验和需要验证。独立验证和评审检查实际业务commit，发布后匿名下载资产核对SHA。无CI时明确为本机检查，不伪报GitHub Actions通过。
 
+##### 决定 9：评审状态提示修正后的候选替换
+
+- `3f9560f` 的只读评审发现设置在开启状态复测失败时误报关闭，属于实际隐私状态反馈错误。T003 重新打开，必要修正限于设置反馈及现有原生窗口回归；测试不改变用户开关，成功和失败提示均依据当前 enabled 状态。其余发送、配置、取消和凭据语义不变。
+- 候选改为从修正源码构建 build 1.0.4，使用既有项目专用且已解锁的测试签名身份；不解锁钥匙串、不提供密码、不改变 ACL/trust，不操作 MiniMax 系统钥匙串或 CC Switch。新归档使用 `.work/minimax/beta2-review-fixed-release`，保留所有旧候选；不安装或启动应用，先前人体验证仅作为未变化的听写/整理/插入路径证据，新增界面提示由 synthetic 原生窗口回归验证。
+- 当前变更不影响冻结规则、数据或 provider，复用已有评测和基础旅程；更新 build 号、当前候选说明和分发文档，重新检查应用构建、窗口、formatter/coordinator、归档签名与校验和，并完成独立验证/评审。若专用签名密钥不可用则停止签名，不尝试密码或系统设置操作。
+
 #### 数据模型 / 关键实体
 
 
@@ -437,3 +443,29 @@ T001 → T002 → T003；首个可开始的是T001。稳定formatter接口先行
 - 通过 `SOURCE_APP=... DIST_DIR="$PWD/.work/minimax/beta2-release" bash scripts/release/create_beta.sh` 生成新的归档，完整证书信任上下文 exit 0；ZIP `1e0d889515c469cf9e356a21842817799eef622c8bfb81cc4e317cfc33c1fec0`，DMG `ccdf83c6ca644ef6be223e56723edc7641fb07026f9039dc4fe735302068050a`。校验和、ZIP/DMG 包内文档链接、`Applications` 链接、arm64、签名和依赖检查均通过。
 - 当前分发说明明确 beta.2 的默认关闭实验状态、v2 PARTIAL 指标、一次实际 GUI 导入/连接/开启和备忘录 Fn 流程证据，且以 Release 页面确定公开下载状态。冻结的规则、fixture、rubric 和 scorer SHA-256 仍与 v2 记录一致。
 - 归档可证明复用的二进制与已测试安装副本相同，并且 bundle 含当前功能的静态 MiniMax/CC Switch 字符串；bundle 未嵌入 Git revision，因而不能仅凭归档加密证明该可执行文件由 `dca88c9` 的完整源码编译。独立验证应将此作为 source-to-binary 追溯缺口处理，而不将其表述为重新构建证明。
+
+## 独立评审与处理（2026-10-25）
+
+- 独立 Sol reviewer 对 `3f9560f` 评审要求修改一项 P2：已开启状态允许重新测试，`beginConnectionTest` 保留 enabled=true；普通失败提示却声称“智能整理仍保持关闭”。根因在设置反馈没有按当前配置区分状态，可能使用户误判后续文字发送行为。原生窗口测试未覆盖已开启后的超时/断网复测。
+- 处理边界：保留连接测试不改变用户开关的现有语义，仅让测试成功/失败反馈显示真实的当前开启状态，并在现有 synthetic native-window harness 覆盖已开启及关闭两种状态的 transport/deadline 失败。无模型、端点、凭据、发送或取消协议变化，不扩大为设置重做。原 T002 实现者在恢复时已不可用，允许替代 Terra worker 完成这项有界修正及 T003 受影响的打包文档。新候选使用 build 1.0.4，旧 1.0.3 与其验证证据保留；不覆盖旧候选，不启动安装版或请求重复真人测试。
+- 评审没有其他必须修复项，也未发现有证据支持的重复实现或可避免工程债。DEC-013、冻结评测、既有实际旅程和未达到的正式指标保持不变；修改后重新验证和评审，当前不得合并发布。
+
+## 独立验证（2026-10-25）
+
+### beta.2 实验发布验收 — `3f9560fe9562d17bea519e5b1803dd856cb757e6`
+
+- **范围与归因**：本次只验证 REQ-002 DEC-013 的默认关闭实验发布条件和 DEC-014 的候选分发准备。结果为 `PASS`，仅表示这些当前实验交付条件已由下列证据覆盖；NFR-001/002、SC-001/002 和完整端到端分位统计仍为 `PARTIAL`，不标为正式质量、忠实性或延迟通过。
+- **Correctness（2026-10-25T02:57:28Z--02:58:27Z）**：`CLANG_MODULE_CACHE_PATH="$PWD/.work/clang-module-cache" bash tests/integration/run_formatting_harness.sh`、`bash tests/integration/run_formatting_eval_selftest.sh` 与 `CLANG_MODULE_CACHE_PATH="$PWD/.work/clang-module-cache" swift test --package-path Packages/ShanshuoCore --scratch-path ../../.work/spm/core --disable-sandbox` 均 exit 0；后者从当前源码编译并通过 22 个 Swift 测试。Formatting harness 使用 synthetic credential、临时 SQLite fixture 和 `URLProtocol`，覆盖进程内凭据、只读导入、默认关闭、连接/配置失效、401/402/429、redirect、超时、取消、迟到回调及无凭据不发送，不访问真实凭据或 provider。未设置 `CLANG_MODULE_CACHE_PATH` 的首次 `swift test` 因 sandbox 禁止写用户级 ModuleCache 未能执行；按项目既有 workspace cache 配置重跑成功，属于环境路径限制而非代码失败。
+- **静态与既有回归适用性**：`git diff --check c43ed8e22a487f05da87369ffbe1ed752edf710d..HEAD`、`git diff --quiet dca88c9..HEAD -- app Packages tests bench` 和 Formatting 目录的 MiniMax Keychain 符号检查均 exit 0；当前提交仅变更分发脚本、文档和 SDLC 上下文，未改应用、核心、测试或 EVAL 源码。`.work/minimax/t003-full-regression-final.log` 的完整 `SKIP_ASR=1` 回归仍到 `== all checks passed`，其中包括 coordinator、native window、history 与 cancellation harness；由于其为此前未提交工作区上的历史日志，它支持行为覆盖，但不是当前 commit 的重新构建证明。
+- **Eval bench**：当前规则、fixture、rubric 与 scorer 的 SHA-256 分别仍为 `cd312522…e6a50`、`e250bdc8…c132`、`2e9fa1f0…b90e`、`7d06fef2…d2c1`；v2 JSONL SHA-256 仍为 `722f4916…b1277`，`freeze.json` 与 summary 均通过结构断言。唯一冻结的网络批次保持 `PARTIAL`：51/60 有效、42/51 严格正确（82.35%）、9 次超时回退、最终/raw fidelity error 各 1、P50/P95 为 2175/5001 ms。未发起 provider 调用、未重跑或调参。
+- **e2e:App（实验范围）**：不启动 GUI、麦克风或手工流程。复用上文安装版的实际知情导入、公开连接测试、明确开启与备忘录 Fn 基本旅程；本轮确认 staging、ZIP 内 app 和 `/Applications/Shanshuo.app` 的 executable SHA-256 都是 `aad379630f54d143c27afec620094d21883e6c185f026d7b43b3e20e0a8a2d71`，且 `ps` 未见 Shanshuo 进程。该证据覆盖 DEC-013 的一次真实基本旅程，不外推为完整应用兼容性或端到端性能通过。
+- **分发归档（2026-10-25T02:57:39Z）**：在 `.work/minimax/beta2-release` 内执行 `shasum -a 256 -c SHA256SUMS.txt` exit 0，确认 ZIP `1e0d889515c469cf9e356a21842817799eef622c8bfb81cc4e317cfc33c1fec0` 和 DMG `ccdf83c6ca644ef6be223e56723edc7641fb07026f9039dc4fe735302068050a`。以只读证书信任读取执行 `bash scripts/release/verify_archives.sh .work/minimax/beta2-release/Shanshuo-v0.1.0-beta.2-macos-arm64.zip .work/minimax/beta2-release/Shanshuo-v0.1.0-beta.2-macos-arm64.dmg .work/minimax/beta2-release/SHA256SUMS.txt` exit 0：ZIP/DMG 校验和、Markdown 链接、`Applications` 链接、arm64、测试签名、Hardened Runtime、audio-input entitlement 和系统动态依赖均通过；没有改动信任设置。首次从仓库根目录运行 checksum manifest 因相对文件名无法解析，改在 manifest 所在目录后通过，未发现资产校验失败。
+- **追溯边界**：当前 `SOURCE_APP` 打包路径和上述相等 hash 证明新 ZIP 复用了已测试的安装二进制，并附带当前分发说明；Info.plist 只有 `0.1.0/1.0.3` 与 `2026-10-23T08:09:19Z`，ZIP 内只有 Qwen 模型 manifest，没有 Git revision 或 source-hash manifest。因此不能把本验证表述为从 `3f9560f` 或 `dca88c9` 重新构建的加密证明。当前应用源码自 `dca88c9` 未变化，足以说明既有行为证据的适用范围，但不消除这一 source-to-binary 追溯缺口。
+- **环境与下一步**：业务工作树在记录前干净；本节是唯一待提交变更。未读取或写入 MiniMax Keychain、未修改 CC Switch、未调用 API、未启动应用。可由主 Agent 核对本节和工作树后请求 `record-validation --feature-id FEAT-002 --result pass --test-command 'bash scripts/release/verify_archives.sh .work/minimax/beta2-release/Shanshuo-v0.1.0-beta.2-macos-arm64.zip .work/minimax/beta2-release/Shanshuo-v0.1.0-beta.2-macos-arm64.dmg .work/minimax/beta2-release/SHA256SUMS.txt' --commit 3f9560fe9562d17bea519e5b1803dd856cb757e6 --at 2026-10-25T02:58:27Z`；随后仍需独立 review，才可按 DEC-014 继续 PR、main 合并和公开 beta.2。
+
+### T003 评审修正后的 1.0.4 候选（2026-10-25）
+
+- 在生产 UI 修正前，新增的 `testConnectionFeedbackPreservesEnabledState` 以 fake credential 与 `DeferredFormattingService` 运行 native-window harness，exit 1，首个失败断言为已开启后的 transport failure 仍错误提示关闭（`.work/minimax/beta2-review-fixed-release/baseline-native-window.log`）。修正后，UI 只读取当前 `enabled` 状态选择连接成功、Key 无效和一般回退的反馈文字；开关、凭据、发送、取消和回退行为未改变。
+- `CLANG_MODULE_CACHE_PATH="$PWD/.work/clang-module-cache" bash tests/integration/run_native_window_construction_harness.sh`、`run_formatting_harness.sh` 和 `run_coordinator_harness.sh` 均 exit 0，日志分别为 `native-window-final.log`、`formatting-harness.log` 和 `coordinator-harness.log`。新增覆盖初始关闭的 transport/deadline failure，以及已开启后的 transport/deadline failure 和成功复测；没有 provider、GUI、麦克风、CC Switch 或 MiniMax Keychain 操作。
+- 当前工作树（基线 `3f9560fe9562d17bea519e5b1803dd856cb757e6` 加本次未提交修正）曾从当前源码新构建并测试签名 `0.1.0/1.0.4`，`ShanshuoBuildTimestamp=2026-10-25T03:10:03Z`，binary SHA-256 为 `4ab3e6a0acb941e3c66d6a88c16cdba43f3c42f3bd870a5a57af8aa90bcbc0ad`。首次打包揭示 verifier 固定期待 `1.0.3`；将该 release assertion同步为 `1.0.4` 后，最终归档重用这一个未变二进制，仅更新当前分发文档。
+- `.work/minimax/beta2-review-fixed-release` 最终 ZIP SHA-256 为 `cab6cf2b7cb98724c66ee35ae3cb3c2bb5cded4e3f5fa72e36de670a2615322d`，DMG 为 `07868a4782efc368dad7fdabe0fcadc70e18ba826294e282716f4dae83cdd8f1`。完整证书信任上下文的 `create_beta.sh` 与 archive verifier 均通过；`shasum -a 256 -c SHA256SUMS.txt`、ZIP 内 bundle 版本/二进制/分发文档比较也通过。新包未重复真人应用旅程或端到端性能测量，既有 `1.0.3` 旅程证据仅适用于未变管线。

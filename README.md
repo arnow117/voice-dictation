@@ -35,7 +35,7 @@ macOS 桌面端语音输入：在任意应用中按住快捷键说话，松开�
 
 ## 安装测试版
 
-发布页按 tag 提供 arm64 的 ZIP、DMG 和 `SHA256SUMS.txt`；具体可下载版本以 [测试版发布页](https://github.com/arnow117/voice-dictation/releases) 为准。`v0.1.0-beta.2` 使用同一 marketing version、构建版本 `1.0.3`，并保留 beta.1 的资产。测试包使用项目测试签名，未经过 Apple 公证，首次打开可能需要在 macOS“隐私与安全性”中明确允许。安装步骤、权限说明和模型下载行为见 [安装说明](docs/install.md)，未完成验证与质量限制见 [已知问题](docs/known-issues.md)。
+发布页按 tag 提供 arm64 的 ZIP、DMG 和 `SHA256SUMS.txt`；具体可下载版本以 [测试版发布页](https://github.com/arnow117/voice-dictation/releases) 为准。`v0.1.0-beta.2` 使用同一 marketing version、构建版本 `1.0.4`，并保留 beta.1 的资产。测试包使用项目测试签名，未经过 Apple 公证，首次打开可能需要在 macOS“隐私与安全性”中明确允许。安装步骤、权限说明和模型下载行为见 [安装说明](docs/install.md)，未完成验证与质量限制见 [已知问题](docs/known-issues.md)。
 
 beta.1 只含 REQ-001 的本地听写；beta.2 接入了 REQ-002 的可选 MiniMax 整理。个人词典尚未接入。
 
@@ -51,7 +51,7 @@ beta.1 只含 REQ-001 的本地听写；beta.2 接入了 REQ-002 的可选 MiniM
 
 验证人员可运行候选：`Shanshuo --formatting-public-eval --out <result.jsonl>`。该显式入口只读一次当前用户的 CC Switch MiniMax 配置，并只在该进程内使用 Key；它只读取 checkout 中的 60 条公开合成夹具，不接收 Key 或任意听写文本。入口记录公开 raw 可见文本和 guard 后的最终文本，由 [公开 rubric 与 scorer](bench/formatting/) 计算结果。
 
-旧的 v1 规则、语料、rubric、scorer 和冻结清单保留在 [v1 基线](bench/formatting/v1/)。一次有界规则修正后的 v2 批次有 60 条结果、51 条有效、42 条正确（82.35%）、9 条超时，最终和 raw 自动保真错误各 1，所有用户可感知延迟 P50/P95 为 2175/5001 ms。因此 v2 仍为 PARTIAL，未达到 ≥95%、零自动保真错误和 1 秒/2.5 秒目标；完整冻结与人工归因见 [v2 评测记录](docs/validation/minimax-formatting-v2.md)。本次按 DEC-013 交付默认关闭的实验功能，正式目标继续由 [Issue #2](https://github.com/arnow117/voice-dictation/issues/2) 跟踪。安装版 `0.1.0/1.0.3` 已完成原生导入、连接和开启，用户在备忘录用 Fn 实际生成保留前文的编号列表；该单次基本流程不等于完整端到端性能分布通过。
+旧的 v1 规则、语料、rubric、scorer 和冻结清单保留在 [v1 基线](bench/formatting/v1/)。一次有界规则修正后的 v2 批次有 60 条结果、51 条有效、42 条正确（82.35%）、9 条超时，最终和 raw 自动保真错误各 1，所有用户可感知延迟 P50/P95 为 2175/5001 ms。因此 v2 仍为 PARTIAL，未达到 ≥95%、零自动保真错误和 1 秒/2.5 秒目标；完整冻结与人工归因见 [v2 评测记录](docs/validation/minimax-formatting-v2.md)。本次按 DEC-013 交付默认关闭的实验功能，正式目标继续由 [Issue #2](https://github.com/arnow117/voice-dictation/issues/2) 跟踪。安装版 `0.1.0/1.0.3` 已完成原生导入、连接和开启，用户在备忘录用 Fn 实际生成保留前文的编号列表；该单次基本流程不等于完整端到端性能分布通过。当前 `1.0.4` 候选只修正已开启状态重新测试后的状态提示，已由 synthetic 原生窗口回归验证，尚未重复真人旅程。
 
 ## 当前核心闭环（开发构建）
 

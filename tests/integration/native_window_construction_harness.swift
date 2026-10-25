@@ -394,9 +394,106 @@ private func testFormattingSettingsWorkflow() {
   let invalidDescriptor = try! invalidCredentials.save("invalid-fixture-key-not-a-real-secret")
   _ = invalidStore.replaceCredential(invalidDescriptor, model: .flash, endpoint: .domestic)
   invalidTest.performClick(nil)
-  check(hasLabel("Key 无效。请通过下方官方链接获取或更新 MiniMax API Key。", in: invalidContent), "invalid Key feedback stays visible")
+  check(
+    hasLabel(
+      "Key 无效。智能整理仍保持关闭。请通过下方官方链接获取或更新 MiniMax API Key。",
+      in: invalidContent
+    ),
+    "invalid Key feedback reports that initially disabled formatting remains disabled"
+  )
   check(!keyHelp.isHidden, "invalid Key feedback retains the official Key console link")
   check(!invalidStore.snapshot().enabled, "an invalid Key never enables formatting")
+}
+
+private func testConnectionFeedbackPreservesEnabledState() {
+  let defaults = UserDefaults(
+    suiteName: "shanshuo-formatting-settings-feedback-\(UUID().uuidString)"
+  )!
+  let configurationStore = FormattingConfigurationStore(defaults: defaults)
+  let credentialStore = FormattingCredentialStore()
+  let formatter = DeferredFormattingService()
+  let controller = FormattingSettingsWindowController(
+    configurationStore: configurationStore,
+    credentialStore: credentialStore,
+    formatter: formatter
+  )
+
+  guard let contentView = controller.window?.contentView,
+    let acknowledgement = button(named: "我了解本次识别文字会发送给 MiniMax 进行整理。", in: contentView),
+    let test = button(named: "测试连接", in: contentView),
+    let enable = button(named: "开启智能整理", in: contentView)
+  else {
+    check(false, "the feedback test exposes the formatting controls")
+    return
+  }
+
+  acknowledgement.performClick(nil)
+  let descriptor = try! credentialStore.save("feedback-fixture-key-not-a-real-secret")
+  _ = configurationStore.replaceCredential(descriptor, model: .flash, endpoint: .domestic)
+
+  test.performClick(nil)
+  formatter.deliverLate(
+    .fallback(original: "第一买牛奶第二取快递", reason: .transportFailure)
+  )
+  check(
+    hasLabel("连接测试未完成。智能整理仍保持关闭。", in: contentView),
+    "a failed test reports that initially disabled formatting remains disabled"
+  )
+  check(
+    !configurationStore.snapshot().enabled,
+    "a failed test does not enable initially disabled formatting"
+  )
+
+  test.performClick(nil)
+  formatter.deliverLate(
+    .fallback(original: "第一买牛奶第二取快递", reason: .deadlineExceeded)
+  )
+  check(
+    hasLabel("连接测试未完成。智能整理仍保持关闭。", in: contentView),
+    "a timed-out test reports that initially disabled formatting remains disabled"
+  )
+
+  test.performClick(nil)
+  formatter.deliverLate(.formatted("第一，买牛奶。"))
+  enable.performClick(nil)
+  check(configurationStore.snapshot().enabled, "a successful test can enable formatting")
+
+  test.performClick(nil)
+  formatter.deliverLate(
+    .fallback(original: "第一买牛奶第二取快递", reason: .transportFailure)
+  )
+  check(
+    hasLabel("连接测试未完成。智能整理仍保持开启。", in: contentView),
+    "a transport failure reports that enabled formatting remains enabled"
+  )
+  check(
+    configurationStore.snapshot().enabled,
+    "a transport failure does not change the enabled switch"
+  )
+
+  test.performClick(nil)
+  formatter.deliverLate(
+    .fallback(original: "第一买牛奶第二取快递", reason: .deadlineExceeded)
+  )
+  check(
+    hasLabel("连接测试未完成。智能整理仍保持开启。", in: contentView),
+    "a timeout reports that enabled formatting remains enabled"
+  )
+  check(
+    configurationStore.snapshot().enabled,
+    "a timeout does not change the enabled switch"
+  )
+
+  test.performClick(nil)
+  formatter.deliverLate(.formatted("第一，买牛奶。"))
+  check(
+    hasLabel("连接测试成功。智能整理保持开启。", in: contentView),
+    "a successful retest reports that enabled formatting remains enabled"
+  )
+  check(
+    configurationStore.snapshot().enabled,
+    "a successful retest does not change the enabled switch"
+  )
 }
 
 private final class FakeHotkeys: HotkeyMonitoring {
@@ -621,6 +718,7 @@ enum NativeWindowConstructionHarness {
       "a model becoming ready cannot record cold readiness while B remains unprepared"
     )
     testFormattingSettingsWorkflow()
+    testConnectionFeedbackPreservesEnabledState()
     let formattingStore = FormattingConfigurationStore(
       defaults: UserDefaults(suiteName: "shanshuo-formatting-window-\(UUID().uuidString)")!
     )
